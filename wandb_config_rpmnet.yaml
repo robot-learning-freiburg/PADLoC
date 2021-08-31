@@ -1,0 +1,24 @@
+"experiment":
+  "epochs" : 150
+  "batch_size" : 1
+  "learning_rate" : 0.00001
+  "beta1" : 0.9
+  "beta2" : 0.999
+  "eps" : 1.e-8
+  "weight_decay" : 0.000005
+  "scheduler": "multistep" # "multistep" or "onecycle"
+  "weights_path" : null
+  "num_points" : 4096
+  "test_sequence": "08"
+  "loop_file": "loop_GT_4m"
+  "point_cloud_augmentation": True
+  "point_cloud_jitter": False
+  # ANGLE LOSS
+  "sinkhorn_iter": 5
+  "sinkhorn_aux_loss": False
+  #Network
+  "features": ['ppf', 'dxyz', 'xyz']
+  "feature_dim": 96
+  "radius": 0.3
+  "num_neighbors": 64
+  "wt_inliers": 0.01

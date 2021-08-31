@@ -1,0 +1,43 @@
+"experiment":
+  # TRAINING
+  "training_type" : 3D # RGB, 3D
+  "epochs" : 150
+  "batch_size" : 6
+  "learning_rate" : 0.004
+  "beta1" : 0.9
+  "beta2" : 0.999
+  "eps" : 1.e-8
+  "weight_decay" : 0.000005
+  # SCHEDULER
+  "scheduler": "multistep" # "multistep" or "onecycle" or "swa"
+  # NETWORK PARAMS 3D
+  "3D_net" : PointNet++ #PVRCNN
+  "head" : SuperGlue #PointNet
+  "use_semantic": False
+  "use_panoptic": False
+  "model_norm": "batch"
+  "num_points" : 4096
+  "feature_size" : 640
+  "cluster_size" : 64
+  "shared_embeddings": False
+  "feature_output_dim_3D" : 256
+  "point_cloud_augmentation": True
+  "point_cloud_jitter": False
+  # LOSS
+  "margin": 0.5
+  "loss_type": "triplet_random"
+  "norm_embeddings": True
+  # KITTI
+  "test_sequence": "08"
+  "without_ground" : False
+  "loop_file": "loop_GT_4m"
+  # LOSS
+  "weight_metric_learning": 1
+  "weight_rot": 1
+  "weight_transl": 0
+  "rot_representation": "6dof"  # "yaw", or "sincos", "ce_N", "quat", "bingham", "6dof"
+  "sinkhorn_iter": 5
+  "sinkhorn_aux_loss": True
+  "sinkhorn_type": "unbalanced"  # or "slack"
+  "mode": "pairs"
+  "hard_mining": False

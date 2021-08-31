@@ -1,0 +1,11 @@
+*.avi
+.idea/
+*.pcd
+*.png
+__pycache__/
+360_plots/
+*.csv
+pcd/
+csv/
+wandb/
+.vscode/settings.json
