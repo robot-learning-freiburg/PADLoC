@@ -7,6 +7,7 @@ from shutil import copy2
 import yaml
 import wandb
 import numpy as np
+import open3d as o3d
 import torch
 import torch.nn.parallel
 import torch.optim as optim

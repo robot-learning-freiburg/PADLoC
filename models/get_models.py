@@ -1,8 +1,8 @@
 from pcdet.config import cfg_from_yaml_file
 from pcdet.config import cfg as pvrcnn_cfg
 
-from models.backbone2D import models_2d as mdl2d
-from models.backbone2D.originalNetvlad import vd16_tokyoTM_conv5_3_max_dag, weights_init
+#from models.backbone2D import models_2d as mdl2d
+#from models.backbone2D.originalNetvlad import vd16_tokyoTM_conv5_3_max_dag, weights_init
 from models.backbone3D.EdgeConv import EdgeConvSeg
 from models.backbone3D.PVRCNN import PVRCNN
 from models.backbone3D.PointNetVlad import PointNetfeat, NetVLADLoupe
@@ -32,10 +32,11 @@ def get_model(exp_cfg, is_training=True):
         # print('Original NetVlad')
         # NV = mdl2d.FCLayer((512 * exp_cfg['image_height'] // 16) * (exp_cfg['image_width'] // 16),
         #              exp_cfg['feature_output_dim_2D'])
-        NV = mdl2d.FCLayer((512 * 320 // 16) * (1216 // 16), exp_cfg['feature_output_dim_2D'])
-        backbone2D = vd16_tokyoTM_conv5_3_max_dag()
-        backbone2D.apply(weights_init)  # Cambiare con i pretrainati
-        model = mdl2d.NetVlad(backbone2D, NV)
+        #NV = mdl2d.FCLayer((512 * 320 // 16) * (1216 // 16), exp_cfg['feature_output_dim_2D'])
+        #backbone2D = vd16_tokyoTM_conv5_3_max_dag()
+        #backbone2D.apply(weights_init)  # Cambiare con i pretrainati
+        #model = mdl2d.NetVlad(backbone2D, NV)
+        pass
     elif exp_cfg['training_type'] == '3D':
         if exp_cfg['3D_net'] == 'PointNet':
             point_net = PointNetfeat(exp_cfg['num_points'], global_feat=True, feature_transform=True,

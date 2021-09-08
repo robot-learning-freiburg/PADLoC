@@ -2,7 +2,7 @@
   # TRAINING
   "training_type" : 3D # RGB, 3D
   "epochs" : 150
-  "batch_size" : 6
+  "batch_size" : 3
   "learning_rate" : 0.004
   "beta1" : 0.9
   "beta2" : 0.999
@@ -11,7 +11,7 @@
   # SCHEDULER
   "scheduler": "multistep" # "multistep" or "onecycle" or "swa"
   # NETWORK PARAMS 3D
-  "3D_net" : PointNet++ #PVRCNN
+  "3D_net" : PVRCNN
   "head" : SuperGlue #PointNet
   "use_semantic": False
   "use_panoptic": False
@@ -19,7 +19,7 @@
   "num_points" : 4096
   "feature_size" : 640
   "cluster_size" : 64
-  "shared_embeddings": False
+  "shared_embeddings": True
   "feature_output_dim_3D" : 256
   "point_cloud_augmentation": True
   "point_cloud_jitter": False
