@@ -1,4 +1,5 @@
 import h5py
+import open3d as o3d
 import torch
 from pykitti.utils import read_calib_file
 from torch.utils.data import Dataset
@@ -13,7 +14,6 @@ from torchvision import transforms
 import pickle
 import pykitti
 from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointnet2_utils import furthest_point_sample
-import open3d as o3d
 from scipy.spatial.transform import Rotation as R
 
 import utils.rotation_conversion as RT

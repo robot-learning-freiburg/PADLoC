@@ -15,7 +15,7 @@ def datasets_concat_kitti(data_dir, sequences_list, transforms, data_type, point
     dataset_list = []
 
     for sequence in sequences_list:
-        poses_file = data_dir + "/sequences/" + sequence + "/poses_SEMANTICKITTI.txt"
+        poses_file = data_dir + "/sequences/" + sequence + "/poses.txt"
         if data_type == "RGB":
             raise NotImplementedError("Not Implemented")
         elif data_type == "3D":

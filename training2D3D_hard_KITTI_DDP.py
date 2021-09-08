@@ -1,4 +1,5 @@
 import argparse
+import faulthandler; faulthandler.enable()
 import os
 import time
 from functools import partial
@@ -638,12 +639,12 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                                                                                    use_panoptic=exp_cfg['use_panoptic'],
                                                                                    jitter=exp_cfg['point_cloud_jitter'])
         validation_dataset = KITTILoader3DDictPairs(args.data, sequences_validation[0],
-                                                    os.path.join(args.data, 'sequences', sequences_validation[0], 'poses_SEMANTICKITTI.txt'),
+                                                    os.path.join(args.data, 'sequences', sequences_validation[0], 'poses.txt'),
                                                     exp_cfg['num_points'], device, without_ground=exp_cfg['without_ground'],
                                                     loop_file=exp_cfg['loop_file'], use_semantic=exp_cfg['use_semantic'],
                                                     use_panoptic=exp_cfg['use_panoptic'])
         dataset_for_recall = KITTILoader3DPoses(args.data, sequences_validation[0],
-                                                os.path.join(args.data, 'sequences', sequences_validation[0], 'poses_SEMANTICKITTI.txt'),
+                                                os.path.join(args.data, 'sequences', sequences_validation[0], 'poses.txt'),
                                                 exp_cfg['num_points'], device, train=False, use_semantic=exp_cfg['use_semantic'],
                                                 use_panoptic=exp_cfg['use_panoptic'], without_ground=exp_cfg['without_ground'],
                                                 loop_file=exp_cfg['loop_file'])
@@ -1150,13 +1151,13 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', default='/home/cattaneo/Datasets/KITTI',
+    parser.add_argument('--data', default='/export/arceyd/dat/kitti/dataset',
                         help='dataset directory')
     parser.add_argument('--dataset', default='kitti',
                         help='dataset')
     parser.add_argument('--epochs', default=100,
                         help='training epochs')
-    parser.add_argument('--checkpoints_dest', default='/home/cattaneo/checkpoints/deep_lcd',
+    parser.add_argument('--checkpoints_dest', default='/home/arceyd/MasterThesis/cp',
                         help='training epochs')
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='enables CUDA training')

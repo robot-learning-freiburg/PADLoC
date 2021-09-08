@@ -86,11 +86,11 @@ class KITTILoader3DPosesOnlyLoopPositives(Dataset):
 
 
 if __name__ == '__main__':
-    base_dir = "/media/RAIDONE/DATASETS/KITTI/ODOMETRY"
+    base_dir = "/home/arceyd/MasterThesis/dat/kitti/dataset"
     sequence = "00"
     for sequence in ["00", "03", "04", "05", "06", "07", "08", "09"]:
         # poses_file = base_dir + "/sequences/" + sequence + "/poses.csv"
-        poses_file = base_dir + "/sequences/" + sequence + "/poses_SEMANTICKITTI.txt"
+        poses_file = base_dir + "/sequences/" + sequence + "/poses.txt"
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         # dataset = KITTILoader3DPoses(dir, sequence, poses_file, 4096, device)
 
