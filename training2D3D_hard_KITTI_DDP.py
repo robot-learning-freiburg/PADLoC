@@ -598,7 +598,8 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
 
     exp_cfg['effective_batch_size'] = exp_cfg['batch_size'] * world_size
     if args.wandb and rank == 0:
-        wandb.init(project="deep_lcd", name=dt_string, config=exp_cfg)
+        project_name = exp_cfg.get("project", "deep_lcd")
+        wandb.init(project=project_name, name=dt_string, config=exp_cfg)
 
     if args.dataset == 'kitti':
         sequences_training = ["00", "03", "04", "05", "06", "07", "08", "09"]  # compulsory data in sequence 10 missing
@@ -1171,6 +1172,8 @@ if __name__ == '__main__':
     parser.add_argument('--weights', type=str, default=None)
     parser.add_argument('--resume', action='store_true')
 
+    parser.add_argument('--config', default="wandb_config.yaml")
+
     args = parser.parse_args()
 
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -1183,7 +1186,7 @@ if __name__ == '__main__':
     if not args.wandb:
         os.environ['WANDB_MODE'] = 'dryrun'
 
-    with open("wandb_config.yaml", "r") as ymlfile:
+    with open(args.config, "r") as ymlfile:
         cfg = yaml.load(ymlfile, Loader=yaml.SafeLoader)
 
     if args.gpu_count == -1:
