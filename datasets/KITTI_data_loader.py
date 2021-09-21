@@ -48,8 +48,8 @@ def get_velo_with_panoptic(idx, dir, sequence, use_semantic=True, use_panoptic=F
         noise = np.clip(noise, -0.05, 0.05)
         scan = scan + noise
 
-    panoptic_path = os.path.join(dir, 'sequences', f'{int(sequence):02d}', 'panoptic_segmentation',
-                                  'logits', f'{idx:06d}.label')
+    panoptic_path = os.path.join(dir, 'sequences', f'{int(sequence):02d}',
+                                  'labels', f'{idx:06d}.label')
     panoptic = np.fromfile(panoptic_path, dtype=np.float32)
     panoptic = panoptic.reshape(scan.shape[0], -1)
 
