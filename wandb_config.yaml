@@ -17,9 +17,9 @@
   # NETWORK PARAMS 3D
   "3D_net" : PVRCNN
   "head" : SuperGlue #PointNet
-  "load_semantic": False
-  "load_panoptic": False
-  "use_logits": True
+  "load_semantic": True
+  "load_panoptic": True
+  "use_logits": False
   "use_semantic": False
   "use_panoptic": False
   "model_norm": "batch"
