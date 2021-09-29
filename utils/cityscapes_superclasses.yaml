@@ -1,0 +1,130 @@
+"superclass":
+  0:
+    "label": "null"
+  1:
+    "label": "flat"
+  2:
+    "label": "human"
+  3:
+    "label": "vehicle"
+  4:
+    "label": "construction"
+  5:
+    "label": "object"
+  6:
+    "label": "nature"
+  7:
+    "label": "sky"
+  8:
+    "label": "void"
+
+"classes":
+  0:
+    "label": "unlabeled"
+    "superclass": 0
+  1:
+    "label": "outlier"
+    "superclass": 0
+
+  10:
+    "label": "car"
+    "superclass": 3
+  11:
+    "label": "bicycle"
+    "superclass": 3
+  13:
+    "label": "bus"
+    "superclass": 3
+  15:
+    "label": "motorcycle"
+    "superclass": 3
+  16:
+    "label": "on-rails"
+    "superclass": 3
+  18:
+    "label": "truck"
+    "superclass": 3
+  20:
+    "label": "other vehicle"
+    "superclass": 3
+
+  30:
+    "label": "person"
+    "superclass": 2
+  31:
+    "label": "bicyclist"
+    "superclass": 2
+  32:
+    "label": "motorcyclist"
+    "superclass": 2
+
+  40:
+    "label": "road"
+    "superclass": 1
+  44:
+    "label": "parking"
+    "superclass": 1
+  48:
+    "label": "sidewalk"
+    "superclass": 1
+  49:
+    "label": "other ground"
+    "superclass": 8
+
+  50:
+    "label": "building"
+    "superclass": 4
+  51:
+    "label": "fence"
+    "superclass": 4
+  52:
+    "label": "other structure"
+    "superclass": 4
+  60:
+    "label": "lane marking"
+    "superclass": 1
+
+  70:
+    "label": "vegetation"
+    "superclass": 6
+  71:
+    "label": "trunk"
+    "superclass": 6
+  72:
+    "label": "terrain"
+    "superclass": 6
+
+  80:
+    "label": "pole"
+    "superclass": 5
+  81:
+    "label": "traffic sign"
+    "superclass": 5
+  99:
+    "label": "other object"
+    "superclass": 5
+
+  252:
+    "label": "moving car"
+    "superclass": 3
+  253:
+    "label": "moving bicyclist"
+    "superclass": 2
+  254:
+    "label": "moving person"
+    "superclass": 2
+  255:
+    "label": "moving motorcyclist"
+    "superclass": 2
+  256:
+    "label": "moving on-rails"
+    "superclass": 3
+  257:
+    "label": "moving bus"
+    "superclass": 3
+  258:
+    "label": "moving truck"
+    "superclass": 3
+  259:
+    "label": "moving other vehicle"
+    "superclass": 3

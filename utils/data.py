@@ -222,42 +222,27 @@ def get_min_max(dataset):
 
 
 def merge_inputs(queries):
-    anchors = []
-    positives = []
-    negatives = []
-    anchors_logits = []
-    positives_logits = []
-    negatives_logits = []
-    returns = {key: default_collate([d[key] for d in queries]) for key in queries[0]
-               if key != 'anchor' and key != 'positive' and key != 'negative' and key != 'anchor_logits'
-               and key != 'positive_logits' and key != 'negative_logits'}
-    for input in queries:
-        if 'anchor' in input:
-            anchors.append(input['anchor'])
-        if 'positive' in input:
-            positives.append(input['positive'])
-        if 'negative' in input:
-            negatives.append(input['negative'])
-        if 'anchor_logits' in input:
-            anchors_logits.append(input['anchor_logits'])
-        if 'positive_logits' in input:
-            positives_logits.append(input['positive_logits'])
-        if 'negative_logits' in input:
-            negatives_logits.append(input['negative_logits'])
 
-    if 'anchor' in input:
-        returns['anchor'] = anchors
-    if 'positive' in input:
-        returns['positive'] = positives
-    if 'negative' in input:
-        returns['negative'] = negatives
-    if 'anchor_logits' in input:
-        returns['anchor_logits'] = anchors_logits
-    if 'positive_logits' in input:
-        returns['positive_logits'] = positives_logits
-    if 'negative_logits' in input:
-        returns['negative_logits'] = negatives_logits
-    return returns
+    # Get the keys that are present in all queries
+    keys = [set([k for k in q.keys()]) for q in queries]
+    keys = keys[0].intersection(*keys)
+
+    # Keys that will be collated into single tensors, built as all possible combinations between input_types and
+    # data_type_suffixes.
+    input_types = ["anchor", "positive", "negative"]
+    data_type_suffixes = ["pose", "rot", "idx"]
+    tensor_collate_keys = [i + "_" + t for i in input_types for t in data_type_suffixes]
+    # Add individual keys to be collated into single tensors
+    tensor_collate_keys.extend(["sequence"])
+
+    # Collate inputs from queries into single tensors (in tensor_collate_keys)
+    tensor_collates = {k: default_collate([q[k] for q in queries]) for k in keys if k in tensor_collate_keys}
+    # Collate inputs from queries into lists of tensors (NOT in tensor_collate_keys)
+    list_collates = {k: [q[k] for q in queries] for k in keys if k not in tensor_collate_keys}
+    # Combine the two dictionaries
+    tensor_collates.update(list_collates)
+
+    return tensor_collates
 
 
 class Timer(object):

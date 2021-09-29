@@ -1,4 +1,8 @@
 "experiment":
+  "project": "deep_lcd"
+  "tags": null
+  "notes": null
+  "num_workers": 2
   # TRAINING
   "training_type" : 3D # RGB, 3D
   "epochs" : 150
@@ -13,6 +17,9 @@
   # NETWORK PARAMS 3D
   "3D_net" : PVRCNN
   "head" : SuperGlue #PointNet
+  "load_semantic": False
+  "load_panoptic": False
+  "use_logits": True
   "use_semantic": False
   "use_panoptic": False
   "model_norm": "batch"
@@ -27,6 +34,10 @@
   "margin": 0.5
   "loss_type": "triplet_random"
   "norm_embeddings": True
+  "instance_matching_loss": True
+  "semantic_weight": 0.5 # Weight for the Semantic Class cost in the UOT algorithm's cost matrix
+  "supersem_weight": 1 # Weight for the Semantic Superclass cost in the UOT algorithm's cost matrix
+  "panoptic_weight": 2.e-7 # Weight for the Panoptic Label Mismatch loss
   # KITTI
   "test_sequence": "08"
   "without_ground" : False

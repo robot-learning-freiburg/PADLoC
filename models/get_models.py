@@ -103,10 +103,13 @@ def get_model(exp_cfg, is_training=True):
                                     cluster_size=exp_cfg['cluster_size'],
                                     output_dim=exp_cfg['feature_output_dim_3D'],
                                     gating=True, add_norm=True, is_training=is_training)
-            model = LCDNet(pvrcnn, net_vlad, feature_norm=False, fc_input_dim=640,
-                           points_num=exp_cfg['num_points'], head=exp_cfg['head'],
-                           rotation_parameters=rotation_parameters, sinkhorn_iter=exp_cfg['sinkhorn_iter'],
-                           use_svd=exp_cfg['use_svd'], sinkhorn_type=exp_cfg['sinkhorn_type'])
+
+            lcd_net_kwargs = {}
+            lcd_net_kwargs.update(exp_cfg)
+            lcd_net_kwargs['feature_norm'] = False
+            lcd_net_kwargs['fc_input_dim'] = 640
+
+            model = LCDNet(pvrcnn, net_vlad, **lcd_net_kwargs)
         else:
             raise TypeError("Unknown 3D network")
     else:

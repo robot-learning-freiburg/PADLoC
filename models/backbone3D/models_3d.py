@@ -46,26 +46,30 @@ class NetVlad(nn.Module):
 
 
 class LCDNet(nn.Module):
-    def __init__(self, backbone, NV, feature_norm=False, fc_input_dim=256,
-                 points_num=4096, head='SuperGlue', rotation_parameters=2,
-                 sinkhorn_iter=5, use_svd=False, sinkhorn_type='unbalanced'):
+    def __init__(self, backbone, NV, **kwargs):
+        # feature_norm=False, fc_input_dim=256,
+        #        points_num=4096, head='SuperGlue', rotation_parameters=2,
+        #        sinkhorn_iter=5, use_svd=False, sinkhorn_type='unbalanced'):
         super().__init__()
         self.backbone = backbone
         self.NV = NV
-        self.feature_norm = feature_norm
-        self.head = head
+        self.feature_norm = kwargs.get("feature_norm", False)
+        self.head = kwargs.get("head") or "SuperGlue"
+
+        fc_input_dim = kwargs.get("fc_input_dim") or 256
+        points_num = kwargs.get("points_num") or 4096
+        rotation_parameters = kwargs.get("rotation_parameters") or 2
 
         #* PointNetHead
-        if head == 'PointNet':
+        if self.head == 'PointNet':
             self.pose_head = PointNetHead(fc_input_dim, points_num, rotation_parameters)
             self.mp1 = torch.nn.MaxPool2d((points_num, 1), 1)
 
         # self.pose_head = CorrelationHead(fc_input_dim, points_num, rotation_parameters)
 
         #* SuperGlueHead
-        elif head == 'SuperGlue':
-            self.pose_head = UOTHead(fc_input_dim, points_num, rotation_parameters,
-                                     sinkhorn_iter, use_svd, sinkhorn_type)
+        elif self.head == 'SuperGlue':
+            self.pose_head = UOTHead(fc_input_dim, points_num, **kwargs)
 
     def forward(self, batch_dict, metric_head=True, compute_embeddings=True, compute_transl=True,
                 compute_rotation=True, compute_backbone=True, mode='pairs'):

@@ -139,6 +139,7 @@ class MyVoxelSetAbstraction(nn.Module):
         else:
             raise NotImplementedError
         keypoints_list = []
+        kp_idx_list = []
         for bs_idx in range(batch_size):
             bs_mask = (batch_indices == bs_idx)
             sampled_points = src_points[bs_mask].unsqueeze(dim=0)  # (1, N, 3)
@@ -152,16 +153,16 @@ class MyVoxelSetAbstraction(nn.Module):
                     cur_pt_idxs[0, -empty_num:] = cur_pt_idxs[0, :empty_num]
 
                 keypoints = sampled_points[0][cur_pt_idxs[0]].unsqueeze(dim=0)
-
             elif self.model_cfg.SAMPLE_METHOD == 'FastFPS':
                 raise NotImplementedError
             else:
                 raise NotImplementedError
 
             keypoints_list.append(keypoints)
+            kp_idx_list.append(cur_pt_idxs.flatten())
 
         keypoints = torch.cat(keypoints_list, dim=0)  # (B, M, 3)
-        return keypoints
+        return keypoints, kp_idx_list
 
     def forward(self, batch_dict, compute_embeddings=True, compute_rotation=True):
         """
@@ -181,7 +182,9 @@ class MyVoxelSetAbstraction(nn.Module):
             point_coords: (N, 4)
 
         """
-        keypoints = self.get_sampled_points(batch_dict)
+        keypoints, kp_indices = self.get_sampled_points(batch_dict)
+
+        batch_dict['keypoint_idxs'] = kp_indices
 
         point_features_list = []
         if 'bev' in self.model_cfg.FEATURES_SOURCE:

@@ -16,7 +16,10 @@ import pykitti
 from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointnet2_utils import furthest_point_sample
 from scipy.spatial.transform import Rotation as R
 
+import yaml
+
 import utils.rotation_conversion as RT
+from utils.semantic_superclass_mapper import SemanticSuperclassMapper
 
 
 def get_velo(idx, dir, sequence, without_ground, jitter=False):
@@ -38,7 +41,7 @@ def get_velo(idx, dir, sequence, without_ground, jitter=False):
     return scan
 
 
-def get_velo_with_panoptic(idx, dir, sequence, use_semantic=True, use_panoptic=False, jitter=False):
+def get_velo_with_panoptic(idx, dir, sequence, use_semantic=True, use_panoptic=False, jitter=False, use_logits=True):
     velo_path = os.path.join(dir, 'sequences', f'{int(sequence):02d}', 'velodyne', f'{idx:06d}.bin')
     scan = np.fromfile(velo_path, dtype=np.float32)
     scan = scan.reshape((-1, 4))
@@ -48,27 +51,62 @@ def get_velo_with_panoptic(idx, dir, sequence, use_semantic=True, use_panoptic=F
         noise = np.clip(noise, -0.05, 0.05)
         scan = scan + noise
 
-    panoptic_path = os.path.join(dir, 'sequences', f'{int(sequence):02d}',
-                                  'labels', f'{idx:06d}.label')
-    panoptic = np.fromfile(panoptic_path, dtype=np.float32)
-    panoptic = panoptic.reshape(scan.shape[0], -1)
+    if use_logits:
 
-    if use_semantic and use_panoptic:
-        logits = panoptic
-        pad_width = ((0, 0), (0, 75 - logits.shape[1]))
-        assert logits.shape[1] <= 75, "Panoptic Logits Shape Error"
-        logits = np.pad(logits, pad_width, constant_values=0)
-    elif use_semantic:
-        logits = panoptic[:, :19]
+        panoptic_path = os.path.join(dir, 'sequences', f'{int(sequence):02d}',
+                                     'labels', f'{idx:06d}.label')
+        panoptic = np.fromfile(panoptic_path, dtype=np.float32)
+        panoptic = panoptic.reshape(scan.shape[0], -1)
+
+        if use_semantic and use_panoptic:
+            logits = panoptic
+            pad_width = ((0, 0), (0, 75 - logits.shape[1]))
+            assert logits.shape[1] <= 75, "Panoptic Logits Shape Error"
+            logits = np.pad(logits, pad_width, constant_values=0)
+        elif use_semantic:
+            logits = panoptic[:, :19]
+        else:
+            logits = panoptic[:, 19:]
+            pad_width = ((0, 0), (0, 56 - logits.shape[1]))
+            assert logits.shape[1] <= 56, "Panoptic Logits Shape Error"
+            logits = np.pad(logits, pad_width, constant_values=0)
     else:
-        logits = panoptic[:, 19:]
-        pad_width = ((0, 0), (0, 56 - logits.shape[1]))
-        assert logits.shape[1] <= 56, "Panoptic Logits Shape Error"
-        logits = np.pad(logits, pad_width, constant_values=0)
+        panoptic_path = os.path.join(dir, 'sequences', f'{int(sequence):02d}',
+                                      'labels', f'{idx:06d}.label')
+        panoptic = np.fromfile(panoptic_path, dtype=np.int32)
+        panoptic = panoptic.reshape(scan.shape[0], -1)
 
+        semantic = np.bitwise_and(panoptic, 0xFFFF).astype(np.float32)
+        instance = np.right_shift(panoptic, 16).astype(np.float32)
+        panoptic = panoptic.astype(np.float32)
+
+        logits = (panoptic, semantic, instance)
 
     return scan, logits
 
+
+def unpack_logits(logits, use_logits, superclass_mapper, prefix, permute=None):
+
+    if use_logits:
+        return {prefix + 'logits': torch.from_numpy(logits)}
+
+    panoptic, semantic, instance = logits
+
+    if permute is not None:
+        panoptic = panoptic[permute]
+        semantic = semantic[permute]
+        instance = instance[permute]
+
+    supersem = superclass_mapper.get_superclass(semantic)
+
+    sample = {
+        prefix + '_panoptic': torch.from_numpy(panoptic.astype(np.float32)),
+        prefix + '_supersem': torch.from_numpy(supersem.astype(np.float32)),
+        prefix + '_semantic': torch.from_numpy(semantic.astype(np.float32)),
+        prefix + '_instance': torch.from_numpy(instance.astype(np.float32))
+    }
+
+    return sample
 
 class KITTILoader3DClasses(Dataset):
     """KITTI ODOMETRY DATASET"""
@@ -120,8 +158,9 @@ class KITTILoader3DClasses(Dataset):
 class KITTILoader3DPoses(Dataset):
     """KITTI ODOMETRY DATASET"""
 
-    def __init__(self, dir, sequence, poses, npoints, device, without_ground=False,
-                 train=True, loop_file='loop_GT', jitter=False, use_semantic=False, use_panoptic=False):
+    def __init__(self, dir, sequence, poses, npoints, device, **kwargs):
+            #without_ground=False,
+            #train=True, loop_file='loop_GT', jitter=False, use_semantic=False, use_panoptic=False, use_logits=True):
         """
 
         :param dataset: directory where dataset is located
@@ -131,9 +170,10 @@ class KITTILoader3DPoses(Dataset):
 
         self.dir = dir
         self.sequence = sequence
-        self.jitter = jitter
-        self.use_semantic = use_semantic
-        self.use_panoptic = use_panoptic
+        self.jitter = kwargs.get("jitter", False)
+        self.use_semantic = kwargs.get("use_semantic", False)
+        self.use_panoptic = kwargs.get("use_panoptic", False)
+        self.use_logits = kwargs.get("use_logits", True)
         data = read_calib_file(os.path.join(dir, 'sequences', sequence, 'calib.txt'))
         cam0_to_velo = np.reshape(data['Tr'], (3, 4))
         cam0_to_velo = np.vstack([cam0_to_velo, [0, 0, 0, 1]])
@@ -153,15 +193,18 @@ class KITTILoader3DPoses(Dataset):
         self.poses = poses2
         self.npoints = npoints
         self.device = device
-        self.train = train
-        self.without_ground = without_ground
+        self.train = kwargs.get("train", True)
+        self.without_ground = kwargs.get("without_ground", False)
+        self.loop_file = kwargs.get("loop_file") or "loop_GT"
 
-        gt_file = os.path.join(dir, 'sequences', sequence, f'{loop_file}.pickle')
+        gt_file = os.path.join(dir, 'sequences', sequence, f'{self.loop_file}.pickle')
         with open(gt_file, 'rb') as f:
             self.loop_gt = pickle.load(f)
         self.have_matches = []
         for i in range(len(self.loop_gt)):
             self.have_matches.append(self.loop_gt[i]['idx'])
+
+        self.superclass_mapper = SemanticSuperclassMapper(cfg_file=kwargs.get("superclass_cfg_file"))
 
     def __len__(self):
         return len(self.poses)
@@ -170,11 +213,16 @@ class KITTILoader3DPoses(Dataset):
 
         if self.use_panoptic or self.use_semantic:
             anchor_pcd, anchor_logits = get_velo_with_panoptic(idx, self.dir, self.sequence,
-                                                               self.use_semantic, self.use_panoptic, self.jitter)
+                                                               self.use_semantic, self.use_panoptic, self.jitter,
+                                                               self.use_logits)
             anchor_pcd = torch.from_numpy(anchor_pcd)
-            anchor_logits = torch.from_numpy(anchor_logits)
         else:
             anchor_pcd = torch.from_numpy(get_velo(idx, self.dir, self.sequence, self.without_ground, self.jitter))
+
+        sample = {'anchor': anchor_pcd}
+
+        if self.use_panoptic or self.use_semantic:
+            sample.update(unpack_logits(anchor_logits, self.use_logits, self.superclass_mapper, "anchor"))
 
         if self.train:
             x = self.poses[idx][0, 3]
@@ -203,29 +251,26 @@ class KITTILoader3DPoses(Dataset):
                     cont += 1
             if self.use_panoptic or self.use_semantic:
                 positive_pcd, positive_logits = get_velo_with_panoptic(positive_idx, self.dir, self.sequence,
-                                                                   self.use_semantic, self.use_panoptic, self.jitter)
+                                                                   self.use_semantic, self.use_panoptic, self.jitter,
+                                                                       self.use_logits)
                 positive_pcd = torch.from_numpy(positive_pcd)
-                positive_logits = torch.from_numpy(positive_logits)
+
 
                 negative_pcd, negative_logits = get_velo_with_panoptic(negative_idx, self.dir, self.sequence,
-                                                                       self.use_semantic, self.use_panoptic, self.jitter)
+                                                                       self.use_semantic, self.use_panoptic, self.jitter,
+                                                                       self.use_logits)
                 negative_pcd = torch.from_numpy(negative_pcd)
-                negative_logits = torch.from_numpy(negative_logits)
+
             else:
                 positive_pcd = torch.from_numpy(get_velo(positive_idx, self.dir, self.sequence, self.without_ground, self.jitter))
                 negative_pcd = torch.from_numpy(get_velo(negative_idx, self.dir, self.sequence, self.without_ground, self.jitter))
 
-            sample = {'anchor': anchor_pcd,
-                      'positive': positive_pcd,
-                      'negative': negative_pcd}
+            sample['positive'] = positive_pcd
+            sample['negative'] = negative_pcd
+
             if self.use_panoptic or self.use_semantic:
-                sample['anchor_logits'] = anchor_logits
-                sample['positive_logits'] = positive_logits
-                sample['negative_logits'] = negative_logits
-        else:
-            sample = {'anchor': anchor_pcd}
-            if self.use_panoptic or self.use_semantic:
-                sample['anchor_logits'] = anchor_logits
+                sample.update(unpack_logits(positive_logits, self.use_logits, self.superclass_mapper, "positive"))
+                sample.update(unpack_logits(negative_logits, self.use_logits, self.superclass_mapper, "negative"))
 
         return sample
 
@@ -296,8 +341,9 @@ class KITTILoaderRGBPoses(Dataset):
 class KITTILoader3DDictPairs(Dataset):
     """KITTI ODOMETRY DATASET"""
 
-    def __init__(self, dir, sequence, poses, npoints, device, without_ground=False, loop_file='loop_GT', jitter=False,
-                 use_semantic=False, use_panoptic=False):
+    def __init__(self, dir, sequence, poses, npoints, device, **kwargs):
+        #without_ground=False, loop_file='loop_GT', jitter=False,
+        #         use_semantic=False, use_panoptic=False, use_logits=True):
         """
 
         :param dataset: directory where dataset is located
@@ -307,11 +353,12 @@ class KITTILoader3DDictPairs(Dataset):
 
         super(KITTILoader3DDictPairs, self).__init__()
 
-        self.jitter = jitter
+        self.jitter = kwargs.get("jitter", False)
         self.dir = dir
         self.sequence = int(sequence)
-        self.use_semantic = use_semantic
-        self.use_panoptic = use_panoptic
+        self.use_semantic = kwargs.get("use_semantic", False)
+        self.use_panoptic = kwargs.get("use_panoptic", False)
+        self.use_logits = kwargs.get("use_logits", False)
         data = read_calib_file(os.path.join(dir, 'sequences', sequence, 'calib.txt'))
         cam0_to_velo = np.reshape(data['Tr'], (3, 4))
         cam0_to_velo = np.vstack([cam0_to_velo, [0, 0, 0, 1]])
@@ -331,13 +378,16 @@ class KITTILoader3DDictPairs(Dataset):
         self.poses = poses2
         self.npoints = npoints
         self.device = device
-        self.without_ground = without_ground
-        gt_file = os.path.join(dir, 'sequences', sequence, f'{loop_file}.pickle')
+        self.without_ground = kwargs.get("without_ground", False)
+        self.loop_file = kwargs.get("loop_file") or "loop_GT"
+        gt_file = os.path.join(dir, 'sequences', sequence, f'{self.loop_file}.pickle')
         with open(gt_file, 'rb') as f:
             self.loop_gt = pickle.load(f)
         self.have_matches = []
         for i in range(len(self.loop_gt)):
             self.have_matches.append(self.loop_gt[i]['idx'])
+
+        self.superclass_mapper = SemanticSuperclassMapper(cfg_file=kwargs.get("superclass_cfg_file"))
 
     def __len__(self):
         return len(self.loop_gt)
@@ -349,14 +399,18 @@ class KITTILoader3DDictPairs(Dataset):
 
         if self.use_panoptic or self.use_semantic:
             anchor_pcd, anchor_logits = get_velo_with_panoptic(frame_idx, self.dir, self.sequence,
-                                                               self.use_semantic, self.use_panoptic, self.jitter)
+                                                               use_semantic=self.use_semantic,
+                                                               use_panoptic=self.use_panoptic, jitter=self.jitter,
+                                                               use_logits=self.use_logits)
             anchor_pcd = torch.from_numpy(anchor_pcd)
-            anchor_logits = torch.from_numpy(anchor_logits)
 
             #Random permute points
             random_permute = torch.randperm(anchor_pcd.shape[0])
             anchor_pcd = anchor_pcd[random_permute]
-            anchor_logits = anchor_logits[random_permute]
+
+            anchor_logits_dict = unpack_logits(anchor_logits, self.use_logits, self.superclass_mapper, "anchor",
+                                               random_permute)
+
         else:
             anchor_pcd = torch.from_numpy(get_velo(frame_idx, self.dir, self.sequence, self.without_ground, self.jitter))
 
@@ -371,14 +425,16 @@ class KITTILoader3DDictPairs(Dataset):
 
         if self.use_panoptic or self.use_semantic:
             positive_pcd, positive_logits = get_velo_with_panoptic(positive_idx, self.dir, self.sequence,
-                                                               self.use_semantic, self.use_panoptic, self.jitter)
+                                                               self.use_semantic, self.use_panoptic, self.jitter,
+                                                                   use_logits=self.use_logits)
             positive_pcd = torch.from_numpy(positive_pcd)
-            positive_logits = torch.from_numpy(positive_logits)
 
             #Random permute points
             random_permute = torch.randperm(positive_pcd.shape[0])
             positive_pcd = positive_pcd[random_permute]
-            positive_logits = positive_logits[random_permute]
+
+            positive_logits_dict = unpack_logits(positive_logits, self.use_logits, self.superclass_mapper, "positive",
+                                                 random_permute)
         else:
             positive_pcd = torch.from_numpy(get_velo(positive_idx, self.dir, self.sequence, self.without_ground, self.jitter))
 
@@ -410,9 +466,10 @@ class KITTILoader3DDictPairs(Dataset):
                   'anchor_idx': frame_idx,
                   'positive_idx': positive_idx
                   }
+
         if self.use_panoptic or self.use_semantic:
-            sample['anchor_logits'] = anchor_logits
-            sample['positive_logits'] = positive_logits
+            sample.update(anchor_logits_dict)
+            sample.update(positive_logits_dict)
 
         return sample
 
@@ -420,8 +477,9 @@ class KITTILoader3DDictPairs(Dataset):
 class KITTILoader3DDictTriplets(Dataset):
     """KITTI ODOMETRY DATASET"""
 
-    def __init__(self, dir, sequence, poses, npoints, device, without_ground=False,
-                 loop_file='loop_GT', hard_negative=False, jitter=False, use_semantic=False, use_panoptic=False):
+    def __init__(self, dir, sequence, poses, npoints, device, **kwargs):
+        #without_ground=False,
+        #         loop_file='loop_GT', hard_negative=False, jitter=False, use_semantic=False, use_panoptic=False):
         """
 
         :param dataset: directory where dataset is located
@@ -431,12 +489,12 @@ class KITTILoader3DDictTriplets(Dataset):
 
         super(KITTILoader3DDictTriplets, self).__init__()
 
-        self.jitter = jitter
+        self.jitter = kwargs.get("jitter", False)
         self.dir = dir
         self.sequence = int(sequence)
-        self.hard_negative = hard_negative
-        self.use_semantic = use_semantic
-        self.use_panoptic = use_panoptic
+        self.hard_negative = kwargs.get("hard_negative", False)
+        self.use_semantic = kwargs.get("use_semantic", False)
+        self.use_panoptic = kwargs.get("use_panoptic", False)
         data = read_calib_file(os.path.join(dir, 'sequences', sequence, 'calib.txt'))
         cam0_to_velo = np.reshape(data['Tr'], (3, 4))
         cam0_to_velo = np.vstack([cam0_to_velo, [0, 0, 0, 1]])
@@ -456,13 +514,17 @@ class KITTILoader3DDictTriplets(Dataset):
         self.poses = poses2
         self.npoints = npoints
         self.device = device
-        self.without_ground = without_ground
-        gt_file = os.path.join(dir, 'sequences', sequence, f'{loop_file}.pickle')
+        self.without_ground = kwargs.get("without_ground", False)
+        self.loop_file = kwargs.get("loop_file") or "loop_GT"
+        gt_file = os.path.join(dir, 'sequences', sequence, f'{self.loop_file}.pickle')
         with open(gt_file, 'rb') as f:
             self.loop_gt = pickle.load(f)
         self.have_matches = []
         for i in range(len(self.loop_gt)):
             self.have_matches.append(self.loop_gt[i]['idx'])
+
+        self.use_logits = kwargs.get("use_logits", True)
+        self.superclass_mapper = SemanticSuperclassMapper(cfg_file=kwargs.get("superclass_cfg_file"))
 
     def __len__(self):
         return len(self.loop_gt)
@@ -474,14 +536,15 @@ class KITTILoader3DDictTriplets(Dataset):
 
         if self.use_panoptic or self.use_semantic:
             anchor_pcd, anchor_logits = get_velo_with_panoptic(frame_idx, self.dir, self.sequence,
-                                                               self.use_semantic, self.use_panoptic, self.jitter)
+                                                               self.use_semantic, self.use_panoptic, self.jitter,
+                                                               use_logits=self.use_logits)
             anchor_pcd = torch.from_numpy(anchor_pcd)
-            anchor_logits = torch.from_numpy(anchor_logits)
 
             #Random permute points
             random_permute = torch.randperm(anchor_pcd.shape[0])
             anchor_pcd = anchor_pcd[random_permute]
-            anchor_logits = anchor_logits[random_permute]
+            anchor_logits_dict = unpack_logits(anchor_logits, self.use_logits, self.superclass_mapper, "anchor",
+                                               random_permute)
         else:
             anchor_pcd = torch.from_numpy(get_velo(frame_idx, self.dir, self.sequence, self.without_ground, self.jitter))
 
@@ -495,14 +558,15 @@ class KITTILoader3DDictTriplets(Dataset):
         positive_idx = np.random.choice(self.loop_gt[idx]['positive_idxs'])
         if self.use_panoptic or self.use_semantic:
             positive_pcd, positive_logits = get_velo_with_panoptic(positive_idx, self.dir, self.sequence,
-                                                                   self.use_semantic, self.use_panoptic, self.jitter)
+                                                                   self.use_semantic, self.use_panoptic, self.jitter,
+                                                                   use_logits=self.use_logits)
             positive_pcd = torch.from_numpy(positive_pcd)
-            positive_logits = torch.from_numpy(positive_logits)
 
             #Random permute points
             random_permute = torch.randperm(positive_pcd.shape[0])
             positive_pcd = positive_pcd[random_permute]
-            positive_logits = positive_logits[random_permute]
+            positive_logits_dict = unpack_logits(positive_logits, self.use_logits, self.superclass_mapper, "positive",
+                                                 random_permute)
         else:
             positive_pcd = torch.from_numpy(get_velo(positive_idx, self.dir, self.sequence, self.without_ground, self.jitter))
 
@@ -522,14 +586,15 @@ class KITTILoader3DDictTriplets(Dataset):
 
         if self.use_panoptic or self.use_semantic:
             negative_pcd, negative_logits = get_velo_with_panoptic(negative_idx, self.dir, self.sequence,
-                                                                   self.use_semantic, self.use_panoptic, self.jitter)
+                                                                   self.use_semantic, self.use_panoptic, self.jitter,
+                                                                   use_logits=self.use_logits)
             negative_pcd = torch.from_numpy(negative_pcd)
-            negative_logits = torch.from_numpy(negative_logits)
 
             #Random permute points
             random_permute = torch.randperm(negative_pcd.shape[0])
             negative_pcd = negative_pcd[random_permute]
-            negative_logits = negative_logits[random_permute]
+            negative_logits_dict = unpack_logits(negative_logits, self.use_logits, self.superclass_mapper, "negative",
+                                                 random_permute)
         else:
             negative_pcd = torch.from_numpy(get_velo(negative_idx, self.dir, self.sequence, self.without_ground, self.jitter))
 
@@ -566,8 +631,8 @@ class KITTILoader3DDictTriplets(Dataset):
                   }
 
         if self.use_panoptic or self.use_semantic:
-            sample['anchor_logits'] = anchor_logits
-            sample['positive_logits'] = positive_logits
-            sample['negative_logits'] = negative_logits
+            sample.update(anchor_logits_dict)
+            sample.update(positive_logits_dict)
+            sample.update(negative_logits_dict)
 
         return sample

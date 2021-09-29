@@ -5,6 +5,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .functional import soft_kronecker
+
 
 class PointNetHead(nn.Module):
 
@@ -209,7 +211,9 @@ def sinkhorn_slack_variables(feature1, feature2, beta, alpha, n_iters: int = 5, 
 
 
 # This function is from https://github.com/valeoai/FLOT/
-def sinkhorn_unbalanced(feature1, feature2, pcloud1, pcloud2, epsilon, gamma, max_iter):
+def sinkhorn_unbalanced(feature1, feature2, pcloud1, pcloud2, epsilon, gamma, max_iter,
+                        semantic1=None, semantic2=None, semantic_weight=0.5,
+                        supersem1=None, supersem2=None, supersem_weight=1):
     """
     Sinkhorn algorithm
     Parameters
@@ -249,6 +253,24 @@ def sinkhorn_unbalanced(feature1, feature2, pcloud1, pcloud2, epsilon, gamma, ma
     feature1 = feature1 / torch.sqrt(torch.sum(feature1 ** 2, -1, keepdim=True) + 1e-8)
     feature2 = feature2 / torch.sqrt(torch.sum(feature2 ** 2, -1, keepdim=True) + 1e-8)
     C = 1.0 - torch.bmm(feature1, feature2.transpose(1, 2))
+
+    normalizer = 1
+    # Add a semantic class mismatch cost
+    if semantic1 is not None and semantic2 is not None:
+        semanticC = 1 - soft_kronecker(semantic1, semantic2)
+
+        C = C + semantic_weight * semanticC
+        normalizer += semantic_weight
+
+    if supersem1 is not None and supersem2 is not None:
+        supersemC = 1 - soft_kronecker(supersem1, supersem2)
+
+        C = C + supersem_weight * supersemC
+        normalizer += supersem_weight
+
+    if normalizer != 1:
+        normalizer = 1 / normalizer
+        C = C / normalizer
 
     # Entropic regularisation
     K = torch.exp(-C / epsilon) #* support
@@ -295,20 +317,29 @@ def sinkhorn_unbalanced(feature1, feature2, pcloud1, pcloud2, epsilon, gamma, ma
 
 class UOTHead(nn.Module):
 
-    def __init__(self, input_dim, points_num, rotation_parameters=2, nb_iter=5, use_svd=False, sinkhorn_type='unbalanced'):
+    def __init__(self, input_dim, points_num, **kwargs):
+        #rotation_parameters=2, nb_iter=5, use_svd=False, sinkhorn_type='unbalanced',
+         #        semantic_cost=False, semantic_weight=None):
         super().__init__()
         # Mass regularisation
         self.gamma = torch.nn.Parameter(torch.zeros(1))
         # Entropic regularisation
         self.epsilon = torch.nn.Parameter(torch.zeros(1))
-        self.nb_iter = nb_iter
-        self.use_svd = use_svd
-        self.sinkhorn_type = sinkhorn_type
+        self.nb_iter = kwargs.get("nb_iter") or 5
+        self.use_svd = kwargs.get("use_svd", False)
+        self.semantic_cost = kwargs.get("instance_matching_loss", False)
 
-        if not use_svd:
+        if self.semantic_cost:
+            self.semantic_weight = kwargs.get("semantic_weight") or torch.nn.Parameter(torch.zeros(1))
+            self.supersem_weight = kwargs.get("supersem_weight") or torch.nn.Parameter(torch.zeros(1))
+
+        self.sinkhorn_type = kwargs.get("sinkhorn_type") or "unbalanced"
+        self.rotation_params = kwargs.get("rotation_parameters") or 2
+
+        if not self.use_svd:
             self.FC1 = nn.Linear(points_num*9, 512)
             self.FC2 = nn.Linear(512, 256)
-            self.FC3 = nn.Linear(256, rotation_parameters)
+            self.FC3 = nn.Linear(256, self.rotation_parameters)
             self.relu = nn.ReLU()
 
     def forward(self, batch_dict, compute_transl=True, compute_rotation=True, src_coords=None, mode='pairs'):
@@ -317,6 +348,14 @@ class UOTHead(nn.Module):
         # time1 = time.time()
         feats = batch_dict['point_features'].squeeze(-1)
         B, C, NUM = feats.shape
+
+        semantic1 = semantic2 = None
+        supersem1 = supersem2 = None
+        keypoint_idx = None
+
+        if self.semantic_cost:
+            keypoint_idx = batch_dict['keypoint_idxs']
+
         if mode == 'pairs':
             assert B % 2 == 0, "Batch size must be multiple of 2: B anchor + B positive samples"
             B = B // 2
@@ -326,6 +365,12 @@ class UOTHead(nn.Module):
             coords = batch_dict['point_coords'].view(2*B, -1, 4)
             coords1 = coords[:B, :, 1:]
             coords2 = coords[B:, :, 1:]
+
+            if self.semantic_cost:
+                semantic1 = torch.stack([s[i] for s, i in zip(batch_dict['anchor_semantic'], keypoint_idx[:B])]).view(B, -1)
+                semantic2 = torch.stack([s[i] for s, i in zip(batch_dict['positive_semantic'], keypoint_idx[B:])]).view(B, -1)
+                supersem1 = torch.stack([s[i] for s, i in zip(batch_dict['anchor_supersem'], keypoint_idx[:B])]).view(B, -1)
+                supersem2 = torch.stack([s[i] for s, i in zip(batch_dict['positive_supersem'], keypoint_idx[B:])]).view(B, -1)
         else:
             assert B % 3 == 0, "Batch size must be multiple of 3: B anchor + B positive + B negative samples"
             B = B // 3
@@ -336,7 +381,22 @@ class UOTHead(nn.Module):
             coords1 = coords[:B, :, 1:]
             coords2 = coords[B:2*B, :, 1:]
 
+            if self.semantic_cost:
+                semantic1 = [s[i] for s, i in zip(batch_dict['anchor_semantic'], keypoint_idx[:B])]
+                semantic2 = [s[i] for s, i in zip(batch_dict['positive_semantic'], keypoint_idx[B:2*B])]
+                supersem1 = torch.stack([s[i] for s, i in zip(batch_dict['anchor_supersem'], keypoint_idx[:B])]).view(B, -1)
+                supersem2 = torch.stack([s[i] for s, i in zip(batch_dict['positive_supersem'], keypoint_idx[B:2*B])]).view(B, -1)
+
         if self.sinkhorn_type == 'unbalanced':
+
+            semantic_weight = self.semantic_weight
+            if isinstance(semantic_weight, nn.Parameter):
+                semantic_weight = torch.exp(semantic_weight)
+
+            supersem_weight = self.supersem_weight
+            if isinstance(supersem_weight, nn.Parameter):
+                supersem_weight = torch.exp(supersem_weight)
+
             transport = sinkhorn_unbalanced(
                 feat1.permute(0, 2, 1),
                 feat2.permute(0, 2, 1),
@@ -345,6 +405,12 @@ class UOTHead(nn.Module):
                 epsilon=torch.exp(self.epsilon) + 0.03,
                 gamma=torch.exp(self.gamma),
                 max_iter=self.nb_iter,
+                semantic1=semantic1,
+                semantic2=semantic2,
+                semantic_weight=semantic_weight,
+                supersem1=supersem1,
+                supersem2=supersem2,
+                supersem_weight=supersem_weight
             )
         else:
             transport = sinkhorn_slack_variables(

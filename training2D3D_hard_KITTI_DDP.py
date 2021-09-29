@@ -42,6 +42,8 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.optim.swa_utils import SWALR, AveragedModel
 
+from models.backbone3D.functional import soft_kronecker
+
 torch.backends.cudnn.benchmark = True
 
 EPOCH = 1
@@ -54,6 +56,15 @@ def _init_fn(worker_id, epoch=0, seed=0):
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
+
+
+def move_from_sample_to_model_in(exp_cfg, sample, model_in):
+    if exp_cfg['instance_matching_loss']:
+        input_types = ["anchor", "positive", "negative"]
+        data_type_suffixes = ["panoptic", "semantic", "instance", "supersem"]
+        panoptic_keys = [i + "_" + t for i in input_types for t in data_type_suffixes]
+        panoptic_inputs = {k: sample[k] for k in panoptic_keys if k in sample}
+        model_in.update(panoptic_inputs)
 
 
 def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
@@ -251,6 +262,9 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
             compute_embeddings = True
             compute_transl = True
             compute_rotation = True
+
+            move_from_sample_to_model_in(exp_cfg, sample, model_in)
+
             if exp_cfg['weight_transl'] == 0 and exp_cfg['weight_rot'] == 0:
                 metric_head = False
             if exp_cfg['weight_transl'] == 0:
@@ -343,6 +357,27 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                 total_loss = total_loss + exp_cfg['weight_rot']*(loss_rot + 0.05*aux_loss)
             else:
                 loss_rot = torch.tensor([0.], device=device)
+
+            if exp_cfg['instance_matching_loss']:
+
+                # Panoptic Label mismatch loss
+                transport_mat = batch_dict['transport']
+                B = transport_mat.shape[0]
+                keypoint_idx = batch_dict['keypoint_idxs']
+
+                panoptic_1 = torch.stack([s[i] for s, i in zip(batch_dict['anchor_panoptic'], keypoint_idx[:B])]).view(B, -1)
+                panoptic_2 = torch.stack([s[i] for s, i in zip(batch_dict['positive_panoptic'], keypoint_idx[B:])]).view(B, -1)
+
+                O1 = 1 - soft_kronecker(panoptic_1)
+                O2 = 1 - soft_kronecker(panoptic_2)
+
+                loss_panoptic = torch.bmm(transport_mat, O1)
+                loss_panoptic = torch.bmm(loss_panoptic, torch.transpose(transport_mat, 2, 1))
+                loss_panoptic = loss_panoptic - O2
+                loss_panoptic = torch.square(loss_panoptic)
+                loss_panoptic = torch.sum(loss_panoptic)
+
+                total_loss = total_loss + exp_cfg['panoptic_weight'] * loss_panoptic
 
             if exp_cfg['weight_metric_learning'] > 0.:
                 if exp_cfg['norm_embeddings']:
@@ -451,6 +486,8 @@ def test(model, sample, exp_cfg, device):
                     if not isinstance(val, np.ndarray):
                         continue
                     model_in[key] = torch.from_numpy(val).float().to(device)
+
+            move_from_sample_to_model_in(exp_cfg, sample, model_in)
 
             batch_dict = model(model_in, metric_head=True)
             anchor_out = batch_dict['out_embedding']
@@ -596,10 +633,14 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     dt_string = current_date.strftime("%d/%m/%Y %H:%M:%S")
     dt_string_folder = current_date.strftime("%d-%m-%Y_%H-%M-%S")
 
+    workers = exp_cfg.get("num_workers") or 2
+    exp_cfg['num_workers'] = workers
+
     exp_cfg['effective_batch_size'] = exp_cfg['batch_size'] * world_size
     if args.wandb and rank == 0:
         project_name = exp_cfg.get("project", "deep_lcd")
-        wandb.init(project=project_name, name=dt_string, config=exp_cfg)
+        wandb.init(project=project_name, name=dt_string, config=exp_cfg,
+                   tags=exp_cfg.get("tags", None), notes=exp_cfg.get("notes", None))
 
     if args.dataset == 'kitti':
         sequences_training = ["00", "03", "04", "05", "06", "07", "08", "09"]  # compulsory data in sequence 10 missing
@@ -613,6 +654,16 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
 
     data_transform = None
 
+    cfg_load_semantic = exp_cfg.get("load_semantic", False)
+    cfg_load_panoptic = exp_cfg.get("load_panoptic", False)
+    cfg_use_semantic = exp_cfg.get("use_semantic", False)
+    cfg_use_panoptic = exp_cfg.get("use_panoptic", False)
+    cfg_instance_matching_loss = exp_cfg.get("instance_matching_loss", False)
+
+    load_semantic = cfg_load_semantic or cfg_use_semantic or cfg_instance_matching_loss
+    load_panoptic = cfg_load_panoptic or cfg_use_panoptic or cfg_instance_matching_loss
+    use_logits = exp_cfg.get("use_logits", True)
+
     if args.dataset == 'kitti':
         if exp_cfg['mode'] == 'pairs':
             training_dataset, dataset_list_train = datasets_concat_kitti(args.data,
@@ -624,10 +675,11 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                                                                          without_ground=exp_cfg['without_ground'],
                                                                          loop_file=exp_cfg['loop_file'],
                                                                          jitter=exp_cfg['point_cloud_jitter'],
-                                                                         use_semantic=exp_cfg['use_semantic'],
-                                                                         use_panoptic=exp_cfg['use_panoptic'])
+                                                                         use_semantic=load_semantic,
+                                                                         use_panoptic=load_panoptic,
+                                                                         use_logits=use_logits)
         else:
-            training_dataset, dataset_list_train =  datasets_concat_kitti_triplets(args.data,
+            training_dataset, dataset_list_train = datasets_concat_kitti_triplets(args.data,
                                                                                    sequences_training,
                                                                                    data_transform,
                                                                                    exp_cfg['training_type'],
@@ -636,19 +688,20 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                                                                                    without_ground=exp_cfg['without_ground'],
                                                                                    loop_file=exp_cfg['loop_file'],
                                                                                    hard_negative=exp_cfg['hard_mining'],
-                                                                                   use_semantic=exp_cfg['use_semantic'],
-                                                                                   use_panoptic=exp_cfg['use_panoptic'],
-                                                                                   jitter=exp_cfg['point_cloud_jitter'])
+                                                                                   use_semantic=load_semantic,
+                                                                                   use_panoptic=load_panoptic,
+                                                                                   jitter=exp_cfg['point_cloud_jitter'],
+                                                                                  use_logits=use_logits)
         validation_dataset = KITTILoader3DDictPairs(args.data, sequences_validation[0],
                                                     os.path.join(args.data, 'sequences', sequences_validation[0], 'poses.txt'),
                                                     exp_cfg['num_points'], device, without_ground=exp_cfg['without_ground'],
-                                                    loop_file=exp_cfg['loop_file'], use_semantic=exp_cfg['use_semantic'],
-                                                    use_panoptic=exp_cfg['use_panoptic'])
+                                                    loop_file=exp_cfg['loop_file'], use_semantic=load_semantic,
+                                                    use_panoptic=load_panoptic, use_logits=use_logits)
         dataset_for_recall = KITTILoader3DPoses(args.data, sequences_validation[0],
                                                 os.path.join(args.data, 'sequences', sequences_validation[0], 'poses.txt'),
-                                                exp_cfg['num_points'], device, train=False, use_semantic=exp_cfg['use_semantic'],
-                                                use_panoptic=exp_cfg['use_panoptic'], without_ground=exp_cfg['without_ground'],
-                                                loop_file=exp_cfg['loop_file'])
+                                                exp_cfg['num_points'], device, train=False, use_semantic=load_semantic,
+                                                use_panoptic=load_panoptic, without_ground=exp_cfg['without_ground'],
+                                                loop_file=exp_cfg['loop_file'], use_logits=use_logits)
     elif args.dataset == 'kitti360':
         training_dataset, dataset_list_train = datasets_concat_kitti360(args.data,
                                                                         sequences_training,
@@ -659,15 +712,18 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                                                                         without_ground=exp_cfg['without_ground'],
                                                                         loop_file=exp_cfg['loop_file'],
                                                                         jitter=exp_cfg['point_cloud_jitter'],
-                                                                        use_semantic=exp_cfg['use_semantic'],
-                                                                        use_panoptic=exp_cfg['use_panoptic'])
+                                                                        use_semantic=load_semantic,
+                                                                        use_panoptic=load_panoptic,
+                                                                        use_logits=use_logits)
         validation_dataset = KITTI3603DDictPairs(args.data, sequences_validation[0],
                                                  without_ground=exp_cfg['without_ground'],
-                                                 loop_file=exp_cfg['loop_file'], use_semantic=exp_cfg['use_semantic'],
-                                                 use_panoptic=exp_cfg['use_panoptic'])
+                                                 loop_file=exp_cfg['loop_file'], use_semantic=load_semantic,
+                                                 use_panoptic=load_panoptic,
+                                                 use_logits=use_logits)
         dataset_for_recall = KITTI3603DPoses(args.data, sequences_validation[0],
-                                             train=False, use_semantic=exp_cfg['use_semantic'],
-                                             use_panoptic=exp_cfg['use_panoptic'], without_ground=exp_cfg['without_ground'],
+                                             train=False, use_semantic=load_semantic,
+                                             use_panoptic=load_panoptic,
+                                             use_logits=use_logits, without_ground=exp_cfg['without_ground'],
                                              loop_file=exp_cfg['loop_file'])
     elif args.dataset == 'nclt':
         training_dataset = NCLTDatasetTriplets(args.data, '2012-01-08', '2012-01-15', 'loops_on_2012-01-08.pickle')
@@ -739,7 +795,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     TrainLoader = torch.utils.data.DataLoader(dataset=training_dataset,
                                               sampler=train_sampler,
                                               batch_size=exp_cfg['batch_size'],
-                                              num_workers=2,
+                                              num_workers=workers,
                                               worker_init_fn=init_fn,
                                               collate_fn=merge_inputs,
                                               pin_memory=True,
@@ -748,7 +804,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     TestLoader = torch.utils.data.DataLoader(dataset=validation_dataset,
                                              sampler=val_sampler,
                                              batch_size=exp_cfg['batch_size'],
-                                             num_workers=2,
+                                             num_workers=workers,
                                              worker_init_fn=init_fn,
                                              collate_fn=merge_inputs,
                                              pin_memory=True)
@@ -756,7 +812,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     RecallLoader = torch.utils.data.DataLoader(dataset=dataset_for_recall,
                                                sampler=recall_sampler,
                                                batch_size=exp_cfg['batch_size'],
-                                               num_workers=2,
+                                               num_workers=workers,
                                                worker_init_fn=init_fn,
                                                collate_fn=merge_inputs,
                                                pin_memory=True)
@@ -860,8 +916,9 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                                                                                   without_ground=exp_cfg['without_ground'],
                                                                                   loop_file=exp_cfg['loop_file'],
                                                                                   hard_negative=True,
-                                                                                  use_semantic=exp_cfg['use_semantic'],
-                                                                                  use_panoptic=exp_cfg['use_panoptic'],
+                                                                                  use_semantic=load_semantic,
+                                                                                  use_panoptic=load_panoptic,
+                                                                                  use_logits=use_logits,
                                                                                   jitter=exp_cfg['point_cloud_jitter'])
             train_sampler = torch.utils.data.distributed.DistributedSampler(
                 training_dataset,
@@ -880,7 +937,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         TrainLoader = torch.utils.data.DataLoader(dataset=training_dataset,
                                                   sampler=train_sampler,
                                                   batch_size=exp_cfg['batch_size'],
-                                                  num_workers=2,
+                                                  num_workers=workers,
                                                   worker_init_fn=init_fn,
                                                   collate_fn=merge_inputs,
                                                   pin_memory=True,
@@ -889,7 +946,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         TestLoader = torch.utils.data.DataLoader(dataset=validation_dataset,
                                                  sampler=val_sampler,
                                                  batch_size=exp_cfg['batch_size'],
-                                                 num_workers=2,
+                                                 num_workers=workers,
                                                  worker_init_fn=init_fn,
                                                  collate_fn=merge_inputs,
                                                  pin_memory=True)
@@ -897,7 +954,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         RecallLoader = torch.utils.data.DataLoader(dataset=dataset_for_recall,
                                                    sampler=recall_sampler,
                                                    batch_size=exp_cfg['batch_size'],
-                                                   num_workers=2,
+                                                   num_workers=workers,
                                                    worker_init_fn=init_fn,
                                                    collate_fn=merge_inputs,
                                                    pin_memory=True)
@@ -910,7 +967,8 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                 # wandb.log({"LR": scheduler.get_last_lr()[0]}, commit=False)
                 wandb.log({"LR": optimizer.param_groups[0]['lr']}, commit=False)
         if rank == 0:
-            print('This is %d-th epoch' % epoch)
+            ordinal = "st" if epoch == 1 else ("nd" if epoch==2 else ("d" if epoch==3 else "th"))
+            print('\n\n\nThis is %d-%s epoch' % (epoch, ordinal))
         epoch_start_time = time.time()
         total_train_loss = 0
         total_rot_loss = 0.
@@ -961,7 +1019,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
             print("------------------------------------")
             print('epoch %d total training loss = %.3f' % (epoch, total_train_loss / len(train_sampler)))
             print('Total epoch time = %.2f' % (time.time() - epoch_start_time))
-            print("------------------------------------")
+            print("------------------------------------\n")
 
         total_test_loss = 0.
         local_loss = 0.0
@@ -989,8 +1047,8 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                     local_iter += 1
 
                     if batch_idx % 20 == 0 and batch_idx != 0:
-                        print('Iter %d time = %.2f' % (batch_idx,
-                                                       time.time() - start_time))
+                        print('Iter %d / %d testing time = %.2f' % (batch_idx, len(TestLoader),
+                                                                    time.time() - start_time))
                         local_iter = 0.
 
         if exp_cfg['weight_metric_learning'] > 0.:
@@ -1131,7 +1189,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         print("Updating SWA BN")
         RecallLoader = torch.utils.data.DataLoader(dataset=training_dataset,
                                                    batch_size=exp_cfg['batch_size'],
-                                                   num_workers=2,
+                                                   num_workers=workers,
                                                    worker_init_fn=init_fn,
                                                    collate_fn=merge_inputs,
                                                    pin_memory=True)
@@ -1162,7 +1220,7 @@ if __name__ == '__main__':
                         help='training epochs')
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='enables CUDA training')
-    parser.add_argument('--wandb', default=False,
+    parser.add_argument('--wandb', action="store_true",
                         help='Activate wandb service')
     parser.add_argument('--augmentation', default=True,
                         help='Enable data augmentation')
@@ -1174,7 +1232,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--config', default="wandb_config.yaml")
 
-    args = parser.parse_args()
+    args, override_cfg = parser.parse_known_args()
 
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = args.port
@@ -1189,9 +1247,20 @@ if __name__ == '__main__':
     with open(args.config, "r") as ymlfile:
         cfg = yaml.load(ymlfile, Loader=yaml.SafeLoader)
 
+
+    try:
+        # Override configuration from cli arguments
+        override_cfg = {k: v for k, v in (c.split(":") for c in override_cfg)}
+        override_cfg_str = "\n".join(('"' + k + '": ' + v for k, v in override_cfg.items()))
+        override_cfg_dict = yaml.safe_load(override_cfg_str)
+        cfg['experiment'].update(override_cfg_dict)
+    except Exception as e:
+        print("Invalid configuration override:")
+        print(e)
+
     if args.gpu_count == -1:
         args.gpu_count = torch.cuda.device_count()
     if args.gpu == -1:
         mp.spawn(main_process, nprocs=args.gpu_count, args=(cfg['experiment'], 42, args.gpu_count, args,))
     else:
-        main_process(args.gpu, cfg['experiment'], 42, args.gpu_count, args)
+        main_process(0, cfg['experiment'], 42, args.gpu_count, args)
