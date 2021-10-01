@@ -136,7 +136,12 @@ def compute_rigid_transform(a: torch.Tensor, b: torch.Tensor, weights: torch.Ten
 
     # Compute rotation using Kabsch algorithm. Will compute two copies with +/-V[:,:3]
     # and choose based on determinant to avoid flips
-    u, s, v = torch.svd(cov, some=False, compute_uv=True)
+    try:
+        u, s, v = torch.svd(cov, some=False, compute_uv=True)
+    except:
+        # Add some small random turbulence to improve convergence
+        u, s, v = torch.svd(cov + 1e-4 * cov.mean() * torch.rand_like(cov), some=False, compute_uv=True)
+
     rot_mat_pos = v @ u.transpose(-1, -2)
     v_neg = v.clone()
     v_neg[:, :, 2] *= -1
