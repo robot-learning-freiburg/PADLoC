@@ -59,7 +59,7 @@ def _init_fn(worker_id, epoch=0, seed=0):
 
 
 def move_from_sample_to_model_in(exp_cfg, sample, model_in):
-    if exp_cfg['instance_matching_loss']:
+    if exp_cfg['instance_matching_loss'] or exp_cfg['semantic_matching_cost']:
         input_types = ["anchor", "positive", "negative"]
         data_type_suffixes = ["panoptic", "semantic", "instance", "supersem"]
         panoptic_keys = [i + "_" + t for i in input_types for t in data_type_suffixes]
@@ -368,8 +368,8 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                 panoptic_1 = torch.stack([s[i] for s, i in zip(batch_dict['anchor_panoptic'], keypoint_idx[:B])]).view(B, -1)
                 panoptic_2 = torch.stack([s[i] for s, i in zip(batch_dict['positive_panoptic'], keypoint_idx[B:])]).view(B, -1)
 
-                O1 = 1 - soft_kronecker(panoptic_1)
-                O2 = 1 - soft_kronecker(panoptic_2)
+                O1 = soft_kronecker(panoptic_1)
+                O2 = soft_kronecker(panoptic_2)
 
                 loss_panoptic = torch.bmm(transport_mat, O1)
                 loss_panoptic = torch.bmm(loss_panoptic, torch.transpose(transport_mat, 2, 1))
@@ -659,9 +659,10 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     cfg_use_semantic = exp_cfg.get("use_semantic", False)
     cfg_use_panoptic = exp_cfg.get("use_panoptic", False)
     cfg_instance_matching_loss = exp_cfg.get("instance_matching_loss", False)
+    cfg_semantic_matching_cost = exp_cfg.get("semantic_matching_cost", False)
 
-    load_semantic = cfg_load_semantic or cfg_use_semantic or cfg_instance_matching_loss
-    load_panoptic = cfg_load_panoptic or cfg_use_panoptic or cfg_instance_matching_loss
+    load_semantic = cfg_load_semantic or cfg_use_semantic or cfg_instance_matching_loss or cfg_semantic_matching_cost
+    load_panoptic = cfg_load_panoptic or cfg_use_panoptic or cfg_instance_matching_loss or cfg_semantic_matching_cost
     use_logits = exp_cfg.get("use_logits", True)
 
     if args.dataset == 'kitti':

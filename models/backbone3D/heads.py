@@ -136,11 +136,12 @@ def compute_rigid_transform(a: torch.Tensor, b: torch.Tensor, weights: torch.Ten
 
     # Compute rotation using Kabsch algorithm. Will compute two copies with +/-V[:,:3]
     # and choose based on determinant to avoid flips
-    try:
-        u, s, v = torch.svd(cov, some=False, compute_uv=True)
-    except:
-        # Add some small random turbulence to improve convergence
-        u, s, v = torch.svd(cov + 1e-4 * cov.mean() * torch.rand_like(cov), some=False, compute_uv=True)
+    # try:
+    #     u, s, v = torch.svd(cov, some=False, compute_uv=True)
+    # except:
+    #     # Add some small random turbulence to improve convergence
+    #     u, s, v = torch.svd(cov + 1e-4 * cov.mean() * torch.rand_like(cov), some=False, compute_uv=True)
+    u, s, v = torch.svd(cov, some=False, compute_uv=True)
 
     rot_mat_pos = v @ u.transpose(-1, -2)
     v_neg = v.clone()
@@ -332,8 +333,10 @@ class UOTHead(nn.Module):
         self.epsilon = torch.nn.Parameter(torch.zeros(1))
         self.nb_iter = kwargs.get("nb_iter") or 5
         self.use_svd = kwargs.get("use_svd", False)
-        self.semantic_cost = kwargs.get("instance_matching_loss", False)
+        self.semantic_cost = kwargs.get("semantic_matching_cost", False)
 
+        self.semantic_weight = None
+        self.supersem_weight = None
         if self.semantic_cost:
             self.semantic_weight = kwargs.get("semantic_weight") or torch.nn.Parameter(torch.zeros(1))
             self.supersem_weight = kwargs.get("supersem_weight") or torch.nn.Parameter(torch.zeros(1))

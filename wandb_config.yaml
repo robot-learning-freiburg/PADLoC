@@ -34,6 +34,7 @@
   "margin": 0.5
   "loss_type": "triplet_random"
   "norm_embeddings": True
+  "semantic_matching_cost": False
   "instance_matching_loss": True
   "semantic_weight": 0.5 # Weight for the Semantic Class cost in the UOT algorithm's cost matrix
   "supersem_weight": 1 # Weight for the Semantic Superclass cost in the UOT algorithm's cost matrix
