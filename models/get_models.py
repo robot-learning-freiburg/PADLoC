@@ -108,6 +108,7 @@ def get_model(exp_cfg, is_training=True):
             lcd_net_kwargs.update(exp_cfg)
             lcd_net_kwargs['feature_norm'] = False
             lcd_net_kwargs['fc_input_dim'] = 640
+            lcd_net_kwargs['rotation_parameters'] = rotation_parameters
 
             model = LCDNet(pvrcnn, net_vlad, **lcd_net_kwargs)
         else:

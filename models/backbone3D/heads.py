@@ -342,7 +342,7 @@ class UOTHead(nn.Module):
             self.supersem_weight = kwargs.get("supersem_weight") or torch.nn.Parameter(torch.zeros(1))
 
         self.sinkhorn_type = kwargs.get("sinkhorn_type") or "unbalanced"
-        self.rotation_params = kwargs.get("rotation_parameters") or 2
+        self.rotation_parameters = kwargs.get("rotation_parameters") or 2
 
         if not self.use_svd:
             self.FC1 = nn.Linear(points_num*9, 512)
@@ -451,7 +451,21 @@ class UOTHead(nn.Module):
         else:
             if src_coords is None:
                 src_coords = coords1
-            transformation = compute_rigid_transform(src_coords, sinkhorn_matches, row_sum.squeeze(-1))
+            try:
+                transformation = compute_rigid_transform(src_coords, sinkhorn_matches, row_sum.squeeze(-1))
+            except RuntimeError as e:
+                print("\n\n\n" + "="*80)
+                print("SVD did not converge!!!!!")
+                print("exp(epsilon):", torch.exp(self.epsilon))
+                print("exp(gamma):", torch.exp(self.gamma))
+                print("\n\n\ntransport: ", transport)
+                print("\n\n\nsrc_coords: ", src_coords)
+                print("\n\n\nsinkhorn matches:   ", sinkhorn_matches)
+                print("\n\n\nrow_sum.squeeze(-1):   ", row_sum.squeeze(-1))
+                print("\n\n\n")
+
+                raise e
+
             batch_dict['transformation'] = transformation
             batch_dict['out_rotation'] = None
             batch_dict['out_translation'] = None

@@ -17,8 +17,8 @@
   # NETWORK PARAMS 3D
   "3D_net" : PVRCNN
   "head" : SuperGlue #PointNet
-  "load_semantic": True
-  "load_panoptic": True
+  "load_semantic": False
+  "load_panoptic": False
   "use_logits": False
   "use_semantic": False
   "use_panoptic": False
@@ -35,7 +35,7 @@
   "loss_type": "triplet_random"
   "norm_embeddings": True
   "semantic_matching_cost": False
-  "instance_matching_loss": True
+  "instance_matching_loss": False
   "semantic_weight": 0.5 # Weight for the Semantic Class cost in the UOT algorithm's cost matrix
   "supersem_weight": 1 # Weight for the Semantic Superclass cost in the UOT algorithm's cost matrix
   "panoptic_weight": 2.e-7 # Weight for the Panoptic Label Mismatch loss
