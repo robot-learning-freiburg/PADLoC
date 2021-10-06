@@ -1248,16 +1248,16 @@ if __name__ == '__main__':
     with open(args.config, "r") as ymlfile:
         cfg = yaml.load(ymlfile, Loader=yaml.SafeLoader)
 
-
-    try:
-        # Override configuration from cli arguments
-        override_cfg = {k: v for k, v in (c.split(":") for c in override_cfg)}
-        override_cfg_str = "\n".join(('"' + k + '": ' + v for k, v in override_cfg.items()))
-        override_cfg_dict = yaml.safe_load(override_cfg_str)
-        cfg['experiment'].update(override_cfg_dict)
-    except Exception as e:
-        print("Invalid configuration override:")
-        print(e)
+    if override_cfg:
+        try:
+            # Override configuration from cli arguments
+            override_cfg = {k: v for k, v in (c.split(":") for c in override_cfg)}
+            override_cfg_str = "\n".join(('"' + k + '": ' + v for k, v in override_cfg.items()))
+            override_cfg_dict = yaml.safe_load(override_cfg_str)
+            cfg['experiment'].update(override_cfg_dict)
+        except Exception as e:
+            print("Invalid configuration override:")
+            print(e)
 
     if args.gpu_count == -1:
         args.gpu_count = torch.cuda.device_count()
