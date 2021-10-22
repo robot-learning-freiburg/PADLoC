@@ -1,130 +1,56 @@
-"superclass":
-  0:
-    "label": "null"
-  1:
-    "label": "flat"
-  2:
-    "label": "human"
-  3:
-    "label": "vehicle"
-  4:
-    "label": "construction"
-  5:
-    "label": "object"
-  6:
-    "label": "nature"
-  7:
-    "label": "sky"
-  8:
-    "label": "void"
+superclasses:
+  columns: ["superclass", "label"]
+  data:
+    - [0, "null"        ]
+    - [1, "flat"        ]
+    - [2, "human"       ]
+    - [3, "vehicle"     ]
+    - [4, "construction"]
+    - [5, "object"      ]
+    - [6, "nature"      ]
+    - [7, "sky"         ]
+    - [8, "void"        ]
 
-"classes":
-  0:
-    "label": "unlabeled"
-    "superclass": 0
-  1:
-    "label": "outlier"
-    "superclass": 0
+classes:
+  columns: ["class", "label", "superclass"]
+  data:
+    - [  0, "unlabeled"           , 0]
+    - [  1, "outlier"             , 0]
+    - [ 10, "car"                 , 3]
+    - [ 11, "bicycle"             , 3]
+    - [ 13, "bus"                 , 3]
+    - [ 15, "motorcycle"          , 3]
+    - [ 16, "on-rails"            , 3]
+    - [ 18, "truck"               , 3]
+    - [ 20, "other vehicle"       , 3]
 
-  10:
-    "label": "car"
-    "superclass": 3
-  11:
-    "label": "bicycle"
-    "superclass": 3
-  13:
-    "label": "bus"
-    "superclass": 3
-  15:
-    "label": "motorcycle"
-    "superclass": 3
-  16:
-    "label": "on-rails"
-    "superclass": 3
-  18:
-    "label": "truck"
-    "superclass": 3
-  20:
-    "label": "other vehicle"
-    "superclass": 3
+    - [ 30, "person"              , 2]
+    - [ 31, "bicyclist"           , 2]
+    - [ 32, "motorcyclist"        , 2]
 
-  30:
-    "label": "person"
-    "superclass": 2
-  31:
-    "label": "bicyclist"
-    "superclass": 2
-  32:
-    "label": "motorcyclist"
-    "superclass": 2
+    - [ 40, "road"                , 1]
+    - [ 44, "parking"             , 1]
+    - [ 48, "sidewalk"            , 1]
+    - [ 49, "other ground"        , 8]
 
-  40:
-    "label": "road"
-    "superclass": 1
-  44:
-    "label": "parking"
-    "superclass": 1
-  48:
-    "label": "sidewalk"
-    "superclass": 1
-  49:
-    "label": "other ground"
-    "superclass": 8
+    - [ 50, "building"            , 4]
+    - [ 51, "fence"               , 4]
+    - [ 52, "other structure"     , 4]
+    - [ 60, "lane marking"        , 1]
 
-  50:
-    "label": "building"
-    "superclass": 4
-  51:
-    "label": "fence"
-    "superclass": 4
-  52:
-    "label": "other structure"
-    "superclass": 4
-  60:
-    "label": "lane marking"
-    "superclass": 1
+    - [ 70, "vegetation"          , 6]
+    - [ 71, "trunk"               , 6]
+    - [ 72, "terrain"             , 6]
 
-  70:
-    "label": "vegetation"
-    "superclass": 6
-  71:
-    "label": "trunk"
-    "superclass": 6
-  72:
-    "label": "terrain"
-    "superclass": 6
+    - [ 80, "pole"                , 5]
+    - [ 81, "traffic sign"        , 5]
+    - [ 99, "other object"        , 5]
 
-  80:
-    "label": "pole"
-    "superclass": 5
-  81:
-    "label": "traffic sign"
-    "superclass": 5
-  99:
-    "label": "other object"
-    "superclass": 5
-
-  252:
-    "label": "moving car"
-    "superclass": 3
-  253:
-    "label": "moving bicyclist"
-    "superclass": 2
-  254:
-    "label": "moving person"
-    "superclass": 2
-  255:
-    "label": "moving motorcyclist"
-    "superclass": 2
-  256:
-    "label": "moving on-rails"
-    "superclass": 3
-  257:
-    "label": "moving bus"
-    "superclass": 3
-  258:
-    "label": "moving truck"
-    "superclass": 3
-  259:
-    "label": "moving other vehicle"
-    "superclass": 3
+    - [252, "moving car"          , 3]
+    - [253, "moving bicyclist"    , 2]
+    - [254, "moving person"       , 2]
+    - [255, "moving motorcyclist" , 2]
+    - [256, "moving on-rails"     , 3]
+    - [257, "moving bus"          , 3]
+    - [258, "moving truck"        , 3]
+    - [259, "moving other vehicle", 3]
