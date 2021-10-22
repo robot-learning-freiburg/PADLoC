@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .functional import soft_kronecker
+from utils.tools import SVDNonConvergenceError
 
 
 class PointNetHead(nn.Module):
@@ -464,7 +465,7 @@ class UOTHead(nn.Module):
                 print("\n\n\nrow_sum.squeeze(-1):   ", row_sum.squeeze(-1))
                 print("\n\n\n")
 
-                raise e
+                raise SVDNonConvergenceError("SVD did not converge!")
 
             batch_dict['transformation'] = transformation
             batch_dict['out_rotation'] = None

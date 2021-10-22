@@ -36,7 +36,7 @@ from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointne
 from utils.geometry import get_rt_matrix, mat2xyzrpy
 from utils.qcqp_layer import QuadQuatFastSolver
 from utils.rotation_conversion import quaternion_from_matrix, quaternion_atan_loss, quat2mat
-from utils.tools import _pairwise_distance, update_bn_swa
+from utils.tools import _pairwise_distance, update_bn_swa, SVDNonConvergenceError, NaNLossError
 from pytorch_metric_learning import distances
 
 import torch.distributed as dist
@@ -274,6 +274,7 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                 compute_rotation = False
             if exp_cfg['weight_metric_learning'] == 0:
                 compute_embeddings = False
+
             batch_dict = model(model_in, metric_head, compute_embeddings,
                                compute_transl, compute_rotation, mode=mode)
 
@@ -284,6 +285,8 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
             # Translation loss
             transl_diff = delta_transl
             total_loss = 0.
+
+            other_loss_dict = {}  # Dictionary used for logging additional losses
 
             reg_loss = torch.nn.SmoothL1Loss(reduction='none')
             # reg_loss = torch.nn.MSELoss(reduction='none')
@@ -297,6 +300,9 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
             if exp_cfg['weight_rot'] > 0.:
                 if exp_cfg['sinkhorn_aux_loss']:
                     aux_loss = sinkhorn_matches_loss(batch_dict, delta_pose, mode=mode)
+                    if torch.any(torch.isnan(aux_loss)):
+                        raise NaNLossError("Sinkhorn Aux Loss has NAN")
+                    other_loss_dict["Loss: Sinkhorn Aux"] = aux_loss
                 else:
                     aux_loss = torch.tensor([0.], device=device)
                 if exp_cfg['rot_representation'] == 'sincos':
@@ -350,9 +356,14 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                     loss_rot = quaternion_atan_loss(quat_out, delta_quat[:, [3,0,1,2]]).mean()
                 elif exp_cfg['rot_representation'] == '6dof':
                     loss_rot = pose_loss(batch_dict, delta_pose, mode=mode)
+                    if torch.any(torch.isnan(aux_loss)):
+                        raise NaNLossError("Rot Loss has NAN")
                     if exp_cfg['sinkhorn_type'] == 'slack':
                         inlier_loss = (1 - batch_dict['transport'].sum(dim=1)).mean()
                         inlier_loss += (1 - batch_dict['transport'].sum(dim=2)).mean()
+                        if torch.any(torch.isnan(aux_loss)):
+                            raise NaNLossError("Sinkhorn Inlier Loss has NAN")
+                        other_loss_dict["Loss: Inlier"] = inlier_loss
                         loss_rot += 0.01 * inlier_loss
 
                 total_loss = total_loss + exp_cfg['weight_rot']*(loss_rot + 0.05*aux_loss)
@@ -383,6 +394,9 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                         pos_mask[i, i+batch_size] = 1
 
                 loss_metric_learning = loss_fn(model_out, pos_mask, neg_mask) * exp_cfg['weight_metric_learning']
+                if torch.any(torch.isnan(aux_loss)):
+                    raise NaNLossError("Loss Metric Learning has NAN")
+                other_loss_dict['Loss: Metric Learning'] = loss_metric_learning
                 total_loss = total_loss + loss_metric_learning
             else:
                 loss_metric_learning = torch.tensor([0.], device=device)
@@ -390,13 +404,16 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
         else:
             raise NotImplementedError("Not Implemented")
 
+        if torch.any(torch.isnan(total_loss)):
+            raise NaNLossError("Total Loss has NAN")
+
         if 'TZMGrad' not in exp_cfg['loss_type']:
             total_loss.backward()
         else:
             raise NotImplementedError("TZMGrad not implemented in DDP")
         optimizer.step()
 
-        return total_loss, loss_rot, loss_transl
+        return total_loss, loss_rot, loss_transl, other_loss_dict
 
 
 def test(model, sample, exp_cfg, device):
@@ -960,27 +977,45 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                 scheduler.step()
             if args.wandb and rank == 0:
                 # wandb.log({"LR": scheduler.get_last_lr()[0]}, commit=False)
-                wandb.log({"LR": optimizer.param_groups[0]['lr']}, commit=False)
+                wandb.log({"LR": optimizer.param_groups[0]['lr']}, commit=False, step=epoch)
         if rank == 0:
             ordinal = "st" if epoch == 1 else ("nd" if epoch==2 else ("d" if epoch==3 else "th"))
-            print('\n\n\nThis is %d-%s epoch' % (epoch, ordinal))
+            print("\n"*3 + "="*80)
+            print('\nThis is %d-%s epoch \n' % (epoch, ordinal))
+            print("="*80 + "\n"*2)
         epoch_start_time = time.time()
         total_train_loss = 0
         total_rot_loss = 0.
         total_transl_loss = 0.
+        total_other_losses = {}
         local_loss = 0.
         local_iter = 0
         total_iter = 0
         store_data = False
 
+        print('Training')
+        print("="*40 + "\n")
         ## Training ##
         for batch_idx, sample in enumerate(TrainLoader):
             # break
             # if batch_idx==3:
             #     break
             start_time = time.time()
-            loss, loss_rot, loss_transl = train(model, optimizer, sample, loss_fn, exp_cfg,
-                                                device, mode=exp_cfg['mode'])
+            skipped_batches = torch.zeros(1).to(device)
+
+            try:
+                loss, loss_rot, loss_transl, other_losses = train(model, optimizer, sample, loss_fn, exp_cfg,
+                                                    device, mode=exp_cfg['mode'])
+            except (SVDNonConvergenceError, NaNLossError) as err:
+                print(err)
+                print("Iter {}: Runtime Error found, ignoring batch".format(batch_idx))
+                loss = torch.zeros(1).to(device)
+                loss_rot = torch.zeros(1).to(device)
+                loss_transl = torch.zeros(1).to(device)
+                other_losses = {}
+                skipped_batches[0] = 1
+                #dist.barrier()
+                #continue
 
             if exp_cfg['scheduler'] == 'onecycle':
                 scheduler.step()
@@ -989,10 +1024,21 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
             dist.reduce(loss, 0)
             dist.reduce(loss_rot, 0)
             dist.reduce(loss_transl, 0)
-            if rank == 0:
-                loss = (loss / world_size).item()
-                loss_rot = (loss_rot / world_size).item()
-                loss_transl = (loss_transl / world_size).item()
+            dist.reduce(skipped_batches, 0)
+
+            #other_reduced_losses = {}
+            if other_losses:
+                for v in other_losses.values():
+                    dist.reduce(v, 0)
+                #other_reduced_losses = {k: dist.reduce(v, 0) for k, v in other_losses.items()}
+
+            batch_world_size = world_size - skipped_batches[0]
+
+            if rank == 0 and batch_world_size:
+
+                loss = (loss / batch_world_size).item()
+                loss_rot = (loss_rot / batch_world_size).item()
+                loss_transl = (loss_transl / batch_world_size).item()
                 local_loss += loss
                 local_iter += 1
 
@@ -1004,11 +1050,18 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                     local_loss = 0.
                     local_iter = 0.
 
-                total_train_loss += loss * sample['anchor_pose'].shape[0]
-                total_rot_loss += loss_rot * sample['anchor_pose'].shape[0]
-                total_transl_loss += loss_transl * sample['anchor_pose'].shape[0]
+                batch_anchor_size = sample['anchor_pose'].shape[0] - skipped_batches
+                total_train_loss += loss * batch_anchor_size
+                total_rot_loss += loss_rot * batch_anchor_size
+                total_transl_loss += loss_transl * batch_anchor_size
 
-                total_iter += sample['anchor_pose'].shape[0]
+                if other_losses:
+                    for k, other_loss in other_losses.items():
+                        tmp_total_loss = total_other_losses[k] if k in total_other_losses else 0
+                        total_other_losses[k] = tmp_total_loss + ((other_loss / batch_world_size).item() *
+                                                                  batch_anchor_size)
+
+                total_iter += batch_anchor_size
 
         if rank == 0:
             print("------------------------------------")
@@ -1023,6 +1076,8 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         yaw_error_sum = 0
         emb_list = []
 
+        print('Testing')
+        print("="*40 + "\n")
         # Testing
         if exp_cfg['weight_rot'] > 0. or exp_cfg['weight_transl'] > 0.:
             for batch_idx, sample in enumerate(TestLoader):
@@ -1074,18 +1129,22 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
             if args.wandb:
                 if exp_cfg['weight_rot'] > 0.:
                     wandb.log({"Rotation Loss": (total_rot_loss / len(train_sampler)),
-                               "Rotation Mean Error": final_yaw_error}, commit=False)
+                               "Rotation Mean Error": final_yaw_error}, commit=False, step=epoch)
                 if exp_cfg['weight_transl'] > 0. or exp_cfg['rot_representation'] == '6dof':
                     wandb.log({"Translation Loss": (total_transl_loss / len(train_sampler)),
-                               "Translation Error": final_transl_error}, commit=False)
+                               "Translation Error": final_transl_error}, commit=False, step=epoch)
                 if exp_cfg['weight_metric_learning'] > 0.:
                     wandb.log({"Validation Recall @ 1": recall[0],
                                "Validation Recall @ 5": recall[4],
                                "Validation Recall @ 10": recall[9],
                                "Max F1": maxF1,
                                "AUC": auc,
-                               "Real AUC": auc2}, commit=False)
-                wandb.log({"Training Loss": (total_train_loss / len(train_sampler))})
+                               "Real AUC": auc2}, commit=False, step=epoch)
+                if total_other_losses:
+                    for k, v in total_other_losses.items():
+                        wandb.log({k: v}, commit=False, step=epoch)
+
+                wandb.log({"Training Loss": (total_train_loss / len(train_sampler))}, step=epoch)
 
             print("------------------------------------")
             if exp_cfg['weight_metric_learning'] > 0.:

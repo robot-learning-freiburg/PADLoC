@@ -7,6 +7,15 @@ from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointne
 # from panoptic.epsnet2.scripts.load_scan import scan_to_epsnet
 
 
+class SVDNonConvergenceError(Exception):
+    def __init__(self, message):
+        super().__init__(message)
+
+
+class NaNLossError(Exception):
+    pass
+
+
 def gather_nd(params, indices, name=None):
     """
     the input indices must be a 2d tensor in the form of [[a,b,..,c],...],
