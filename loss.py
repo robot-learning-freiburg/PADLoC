@@ -7,6 +7,8 @@ from pytorch_metric_learning.losses import CircleLoss
 from pytorch_metric_learning import distances
 from utils.tools import pairwise_mse
 
+from models.backbone3D.functional import soft_kronecker
+
 
 class TripletLoss(nn.Module):
     def __init__(self, margin: float, triplet_selector, distance: distances.BaseDistance):
@@ -290,4 +292,25 @@ def rpm_loss_for_rpmnet(points_src, transformations, delta_pose, mode='pairs'):
         discount = 0.5
         discount = discount ** (len(transformations) - i - 1)
         loss += torch.mean(torch.abs(pred_dst_coords - gt_dst_coords)) * discount
+    return loss
+
+
+def panoptic_mismatch_loss(batch_dict):
+    # Panoptic Label mismatch loss
+    transport_mat = batch_dict['transport']
+    B = transport_mat.shape[0]
+    keypoint_idx = batch_dict['keypoint_idxs']
+
+    panoptic_1 = torch.stack([s[i] for s, i in zip(batch_dict['anchor_panoptic'], keypoint_idx[:B])]).view(B, -1)
+    panoptic_2 = torch.stack([s[i] for s, i in zip(batch_dict['positive_panoptic'], keypoint_idx[B:])]).view(B, -1)
+
+    O1 = soft_kronecker(panoptic_1)
+    O2 = soft_kronecker(panoptic_2)
+
+    loss = torch.bmm(transport_mat, O1)
+    loss = torch.bmm(loss, torch.transpose(transport_mat, 2, 1))
+    loss = loss - O2
+    loss = torch.square(loss)
+    loss = torch.sum(loss)
+
     return loss

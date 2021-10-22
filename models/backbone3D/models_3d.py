@@ -57,7 +57,7 @@ class LCDNet(nn.Module):
         self.head = kwargs.get("head") or "SuperGlue"
 
         fc_input_dim = kwargs.get("fc_input_dim") or 256
-        points_num = kwargs.get("points_num") or 4096
+        points_num = kwargs.get("num_points") or 4096
         rotation_parameters = kwargs.get("rotation_parameters") or 2
 
         #* PointNetHead

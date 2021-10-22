@@ -22,7 +22,8 @@ from torchvision import transforms
 from datasets.KITTI360Dataset import KITTI3603DDictPairs, KITTI3603DPoses
 from datasets.KITTI_data_loader import KITTILoader3DPoses, KITTILoader3DDictPairs
 from datasets.NCLTDataset import NCLTDatasetPairs, NCLTDataset, NCLTDatasetTriplets
-from loss import smooth_metric_lossv2, NPair_loss, Circle_Loss, TripletLoss, sinkhorn_matches_loss, pose_loss
+from loss import smooth_metric_lossv2, NPair_loss, Circle_Loss, TripletLoss, sinkhorn_matches_loss, pose_loss,\
+    panoptic_mismatch_loss
 from models.backbone3D.RandLANet.RandLANet import prepare_randlanet_input
 from models.backbone3D.RandLANet.helper_tool import ConfigSemanticKITTI2
 from models.get_models import get_model
@@ -42,7 +43,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.optim.swa_utils import SWALR, AveragedModel
 
-from models.backbone3D.functional import soft_kronecker
+
 
 torch.backends.cudnn.benchmark = True
 
@@ -358,25 +359,12 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
             else:
                 loss_rot = torch.tensor([0.], device=device)
 
+            loss_panoptic = torch.zeros(1)
             if exp_cfg['instance_matching_loss']:
-
-                # Panoptic Label mismatch loss
-                transport_mat = batch_dict['transport']
-                B = transport_mat.shape[0]
-                keypoint_idx = batch_dict['keypoint_idxs']
-
-                panoptic_1 = torch.stack([s[i] for s, i in zip(batch_dict['anchor_panoptic'], keypoint_idx[:B])]).view(B, -1)
-                panoptic_2 = torch.stack([s[i] for s, i in zip(batch_dict['positive_panoptic'], keypoint_idx[B:])]).view(B, -1)
-
-                O1 = soft_kronecker(panoptic_1)
-                O2 = soft_kronecker(panoptic_2)
-
-                loss_panoptic = torch.bmm(transport_mat, O1)
-                loss_panoptic = torch.bmm(loss_panoptic, torch.transpose(transport_mat, 2, 1))
-                loss_panoptic = loss_panoptic - O2
-                loss_panoptic = torch.square(loss_panoptic)
-                loss_panoptic = torch.sum(loss_panoptic)
-
+                loss_panoptic = panoptic_mismatch_loss(batch_dict)
+                if torch.any(torch.isnan(loss_panoptic)):
+                    raise NaNLossError("Panoptic Mismatch Loss has NaN.")
+                other_loss_dict["Loss: Panoptic Mismatch"] = loss_panoptic
                 total_loss = total_loss + exp_cfg['panoptic_weight'] * loss_panoptic
 
             if exp_cfg['weight_metric_learning'] > 0.:
@@ -660,6 +648,12 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     cfg_use_panoptic = exp_cfg.get("use_panoptic", False)
     cfg_instance_matching_loss = exp_cfg.get("instance_matching_loss", False)
     cfg_semantic_matching_cost = exp_cfg.get("semantic_matching_cost", False)
+    exp_cfg["load_semantic"] = cfg_load_semantic
+    exp_cfg["load_panoptic"] = cfg_load_panoptic
+    exp_cfg["use_semantic"] = cfg_use_semantic
+    exp_cfg["use_panoptic"] = cfg_use_panoptic
+    exp_cfg["instance_matching_loss"] = cfg_instance_matching_loss
+    exp_cfg["semantic_matching_cost"] = cfg_semantic_matching_cost
 
     load_semantic = cfg_load_semantic or cfg_use_semantic or cfg_instance_matching_loss or cfg_semantic_matching_cost
     load_panoptic = cfg_load_panoptic or cfg_use_panoptic or cfg_instance_matching_loss or cfg_semantic_matching_cost
