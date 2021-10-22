@@ -635,8 +635,18 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     # print(rank, t, gather_t)
 
     current_date = datetime.now()
-    dt_string = current_date.strftime("%d/%m/%Y %H:%M:%S")
-    dt_string_folder = current_date.strftime("%d-%m-%Y_%H-%M-%S")
+
+    dt_fmt = "%d/%m/%Y %H:%M:%S"
+    dt_folder_fmt = "%d-%m-%Y_%H-%M-%S"
+    dt_string = current_date.strftime(dt_fmt)
+    dt_string_folder = current_date.strftime(dt_folder_fmt)
+
+    resume_wandb = False
+    if args.weights is not None:
+        weight_dir = os.path.dirname(args.weights).split(os.path.sep)[-1]
+        dt_string_folder = weight_dir
+        dt_string = datetime.strptime(dt_string_folder, dt_folder_fmt).strftime(dt_fmt)
+        resume_wandb = True
 
     workers = exp_cfg.get("num_workers") or 2
     exp_cfg['num_workers'] = workers
@@ -644,8 +654,10 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     exp_cfg['effective_batch_size'] = exp_cfg['batch_size'] * world_size
     if args.wandb and rank == 0:
         project_name = exp_cfg.get("project", "deep_lcd")
-        wandb.init(project=project_name, name=dt_string, config=exp_cfg,
-                   tags=exp_cfg.get("tags", None), notes=exp_cfg.get("notes", None))
+        wandb_id = dt_string_folder
+
+        wandb.init(project=project_name, name=dt_string, config=exp_cfg, id=wandb_id,
+                   tags=exp_cfg.get("tags", None), notes=exp_cfg.get("notes", None), resume=resume_wandb)
 
     if args.dataset == 'kitti':
         sequences_training = ["00", "03", "04", "05", "06", "07", "08", "09"]  # compulsory data in sequence 10 missing
@@ -834,7 +846,8 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
             raise TypeError('Folder for saving checkpoints does not exist!')
         elif args.wandb:
             final_dest = args.checkpoints_dest + '/' + exp_cfg['training_type'] + '/' + dt_string_folder
-            os.mkdir(final_dest)
+            if not os.path.exists(final_dest):
+                os.mkdir(final_dest)
             wandb.save(f'{final_dest}/best_model_so_far.tar')
             copy2('wandb_config.yaml', f'{final_dest}/wandb_config.yaml')
             wandb.save(f'{final_dest}/wandb_config.yaml')
