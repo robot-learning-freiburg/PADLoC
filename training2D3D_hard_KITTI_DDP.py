@@ -298,7 +298,7 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                 loss_transl = torch.tensor([0.], device=device)
 
             if exp_cfg['weight_rot'] > 0.:
-                if exp_cfg['sinkhorn_aux_loss']:
+                if exp_cfg['head'] == "SuperGlue" and exp_cfg['sinkhorn_aux_loss']:
                     aux_loss = sinkhorn_matches_loss(batch_dict, delta_pose, mode=mode)
                     if torch.any(torch.isnan(aux_loss)):
                         raise NaNLossError("Sinkhorn Aux Loss has NAN")
@@ -356,9 +356,9 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                     loss_rot = quaternion_atan_loss(quat_out, delta_quat[:, [3,0,1,2]]).mean()
                 elif exp_cfg['rot_representation'] == '6dof':
                     loss_rot = pose_loss(batch_dict, delta_pose, mode=mode)
-                    if torch.any(torch.isnan(aux_loss)):
+                    if torch.any(torch.isnan(loss_rot)):
                         raise NaNLossError("Rot Loss has NAN")
-                    if exp_cfg['sinkhorn_type'] == 'slack':
+                    if exp_cfg['head'] == "SuperGlue" and exp_cfg['sinkhorn_type'] == 'slack':
                         inlier_loss = (1 - batch_dict['transport'].sum(dim=1)).mean()
                         inlier_loss += (1 - batch_dict['transport'].sum(dim=2)).mean()
                         if torch.any(torch.isnan(aux_loss)):
@@ -849,7 +849,8 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
             if not os.path.exists(final_dest):
                 os.mkdir(final_dest)
             wandb.save(f'{final_dest}/best_model_so_far.tar')
-            copy2('wandb_config.yaml', f'{final_dest}/wandb_config.yaml')
+            #copy2('wandb_config.yaml', f'{final_dest}/wandb_config.yaml')
+            yaml.dump({'experiment': exp_cfg}, f'{final_dest}/wandb_config.yaml')
             wandb.save(f'{final_dest}/wandb_config.yaml')
         else:
             print('Saving checkpoints mod OFF.')
@@ -1071,7 +1072,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                 if other_losses:
                     for k, other_loss in other_losses.items():
                         tmp_total_loss = total_other_losses[k] if k in total_other_losses else 0
-                        total_other_losses[k] = tmp_total_loss + ((other_loss / batch_world_size).item() *
+                        total_other_losses[k] = tmp_total_loss + ((other_loss.detach().item() / batch_world_size).item() *
                                                                   batch_anchor_size)
 
                 total_iter += batch_anchor_size

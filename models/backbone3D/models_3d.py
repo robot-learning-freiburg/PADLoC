@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from models.backbone3D.heads import PointNetHead, CorrelationHead, UOTHead
+from models.backbone3D.transformer_head import TransformerHead
 
 
 #import models.Backbone3D.Pointnet2_PyTorch.models.pointnet2_msg_sem as PN2
@@ -71,6 +72,9 @@ class LCDNet(nn.Module):
         elif self.head == 'SuperGlue':
             self.pose_head = UOTHead(fc_input_dim, points_num, **kwargs)
 
+        elif self.head == 'Transformer':
+            self.pose_head = TransformerHead(**kwargs)
+
     def forward(self, batch_dict, metric_head=True, compute_embeddings=True, compute_transl=True,
                 compute_rotation=True, compute_backbone=True, mode='pairs'):
         # time1 = time.time()
@@ -89,7 +93,7 @@ class LCDNet(nn.Module):
             batch_dict['point_features_NV'] = batch_dict['point_features_NV'].permute(0, 2, 1, 3)
         # print(backbone_out.shape)
         # time1 = time.time()
-        if compute_embeddings:
+        if compute_embeddings and self.head != 'Transformer':
             embedding = self.NV(batch_dict['point_features_NV'])
             # time2 = time.time()
             # print("NetVlad: ", time2-time1)
@@ -122,6 +126,10 @@ class LCDNet(nn.Module):
             #* SuperGlueHead
             elif self.head == 'SuperGlue':
                 batch_dict = self.pose_head(batch_dict, compute_transl, compute_rotation, mode=mode)
+
+            #* TransformerHead
+            elif self.head == 'Transformer':
+                batch_dict = self.pose_head(batch_dict, mode=mode)
 
             # time2 = time.time()
             # print("Pose Head: ", time2-time1)

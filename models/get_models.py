@@ -95,14 +95,18 @@ def get_model(exp_cfg, is_training=True):
         elif exp_cfg['3D_net'] == 'PVRCNN':
             cfg_from_yaml_file('./models/backbone3D/pv_rcnn.yaml', pvrcnn_cfg)
             pvrcnn_cfg.MODEL.PFE.NUM_KEYPOINTS = exp_cfg['num_points']
+            pvrcnn_cfg.MODEL.PFE.NUM_OUTPUT_FEATURES = exp_cfg['feature_size']
             if 'PC_RANGE' in exp_cfg:
                 pvrcnn_cfg.DATA_CONFIG.POINT_CLOUD_RANGE = exp_cfg['PC_RANGE']
             pvrcnn = PVRCNN(pvrcnn_cfg, is_training, exp_cfg['model_norm'], exp_cfg['shared_embeddings'],
                             exp_cfg['use_semantic'], exp_cfg['use_panoptic'])
-            net_vlad = NetVLADLoupe(feature_size=pvrcnn_cfg.MODEL.PFE.NUM_OUTPUT_FEATURES,
-                                    cluster_size=exp_cfg['cluster_size'],
-                                    output_dim=exp_cfg['feature_output_dim_3D'],
-                                    gating=True, add_norm=True, is_training=is_training)
+            if exp_cfg['head'] == "Transformer":
+                net_vlad = None
+            else:
+                net_vlad = NetVLADLoupe(feature_size=pvrcnn_cfg.MODEL.PFE.NUM_OUTPUT_FEATURES,
+                                        cluster_size=exp_cfg['cluster_size'],
+                                        output_dim=exp_cfg['feature_output_dim_3D'],
+                                        gating=True, add_norm=True, is_training=is_training)
 
             lcd_net_kwargs = {}
             lcd_net_kwargs.update(exp_cfg)

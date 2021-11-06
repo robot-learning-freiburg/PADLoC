@@ -298,6 +298,13 @@ def rpm_loss_for_rpmnet(points_src, transformations, delta_pose, mode='pairs'):
 def panoptic_mismatch_loss(batch_dict):
     # Panoptic Label mismatch loss
     transport_mat = batch_dict['transport']
+    # Normalize rows of Transport Matrix
+    transport_mat_rows = torch.sum(transport_mat, 2, keepdim=True)
+    transport_mat_rows[transport_mat_rows < 1e-6] = 1  # Ignore rows that add up to 0 (Set to one to avoid division by 0)
+    transport_mat = transport_mat / transport_mat_rows
+
+    pinv_transport_mat = torch.pinverse(transport_mat)
+    o1_mask = torch.matmul(transport_mat, pinv_transport_mat)
     B = transport_mat.shape[0]
     keypoint_idx = batch_dict['keypoint_idxs']
 
@@ -307,9 +314,14 @@ def panoptic_mismatch_loss(batch_dict):
     O1 = soft_kronecker(panoptic_1)
     O2 = soft_kronecker(panoptic_2)
 
-    loss = torch.bmm(transport_mat, O1)
-    loss = torch.bmm(loss, torch.transpose(transport_mat, 2, 1))
-    loss = loss - O2
+    transf_o2 = torch.bmm(transport_mat, O2)
+    transf_o2 = torch.bmm(transf_o2, pinv_transport_mat)
+
+
+    inv_masked_o1 = torch.bmm(o1_mask, O1)
+    inv_masked_o1 = 1 - inv_masked_o1
+
+    loss = torch.multiply(transf_o2, inv_masked_o1)
     loss = torch.square(loss)
     loss = torch.sum(loss)
 

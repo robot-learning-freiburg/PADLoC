@@ -24,7 +24,7 @@
   "use_panoptic": False
   "model_norm": "batch"
   "num_points" : 4096
-  "feature_size" : 640
+  "feature_size" : 64
   "cluster_size" : 64
   "shared_embeddings": True
   "feature_output_dim_3D" : 256
