@@ -100,9 +100,10 @@ def get_model(exp_cfg, is_training=True):
                 pvrcnn_cfg.DATA_CONFIG.POINT_CLOUD_RANGE = exp_cfg['PC_RANGE']
             pvrcnn = PVRCNN(pvrcnn_cfg, is_training, exp_cfg['model_norm'], exp_cfg['shared_embeddings'],
                             exp_cfg['use_semantic'], exp_cfg['use_panoptic'])
-            if exp_cfg['head'] == "Transformer":
-                net_vlad = None
-            else:
+
+            net_vlad = None
+
+            if exp_cfg['head'] != "Transformer" or exp_cfg['desc_head'] == "NetVLAD":
                 net_vlad = NetVLADLoupe(feature_size=pvrcnn_cfg.MODEL.PFE.NUM_OUTPUT_FEATURES,
                                         cluster_size=exp_cfg['cluster_size'],
                                         output_dim=exp_cfg['feature_output_dim_3D'],

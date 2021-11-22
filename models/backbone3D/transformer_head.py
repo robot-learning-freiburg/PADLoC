@@ -10,12 +10,8 @@ class PositionalEncoding3D(nn.Module):
 	def __init__(self, channels):
 		super(PositionalEncoding3D, self).__init__()
 
-
-
 	def forward(self, x):
 		return x
-
-
 
 
 class TransformerHead(nn.Module):
@@ -36,6 +32,8 @@ class TransformerHead(nn.Module):
 		n_head = kwargs.get('tf_enc_heads') or 1
 		n_layers = kwargs.get('tf_enc_layers') or 1
 
+		self.descriptor_head = kwargs['desc_head']
+
 		n_dec_head = kwargs.get('tf_dec_heads') or 3
 		n_dec_layers = kwargs.get('tf_dec_heads') or 1
 		self.key_size = kwargs.get("tf_key_size") or 64
@@ -46,14 +44,13 @@ class TransformerHead(nn.Module):
 		# self._desc_decoder_layer = nn.TransformerDecoderLayer(d_model=num_points, nhead=1, dim_feedforward=256)
 		# self.desc_decoder = nn.TransformerDecoder(self._desc_decoder_layer, 1)
 
-		self.FC1 = nn.Linear(feat_size, desc_size)
+		#self.FC1 = nn.Linear(feat_size, desc_size)
 		#self.FC2 = nn.Linear(num_points, hidden_size)
 		#self.FC3 = nn.Linear(hidden_size, desc_size)
-		self.relu = nn.ReLU()
+		#self.relu = nn.ReLU()
 
 		self.wQ = nn.Parameter(torch.rand(n_dec_layers, feat_size, self.key_size))
 		self.wK = nn.Parameter(torch.rand(n_dec_layers, feat_size, self.key_size))
-
 
 	def forward(self, batch_dict, **kwargs):
 
@@ -67,14 +64,16 @@ class TransformerHead(nn.Module):
 		src = self.encoder(features)
 
 		# Generate Global Descriptor
-		#descriptor = self.desc_decoder(src)
+		if self.descriptor_head != "NetVLAD":
+			#descriptor = self.desc_decoder(src)
 
-		descriptor = self.relu(self.FC1(src.permute(1, 2, 0)))
-		descriptor, _ = torch.max(descriptor, dim=1)
-		#descriptor = self.relu(self.FC2(descriptor.reshape(B, P)))
-		#descriptor = self.relu(self.FC3(descriptor))
+			descriptor = self.relu(self.FC1(src.permute(1, 2, 0)))
+			descriptor, _ = torch.max(descriptor, dim=1)
 
-		batch_dict['out_embedding'] = descriptor
+			#descriptor = self.relu(self.FC2(descriptor.reshape(B, P)))
+			#descriptor = self.relu(self.FC3(descriptor))
+
+			batch_dict['out_embedding'] = descriptor
 
 		mode = kwargs.get("mode") or "pairs"
 

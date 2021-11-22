@@ -1014,6 +1014,11 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
             # break
             # if batch_idx==3:
             #     break
+
+            # Test to see if memory increases due to variability in PointCloud sizes by skipping some batches
+            #if batch_idx < 100:
+            #    continue
+
             start_time = time.time()
             skipped_batches = torch.zeros(1).to(device)
 
@@ -1072,7 +1077,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                 if other_losses:
                     for k, other_loss in other_losses.items():
                         tmp_total_loss = total_other_losses[k] if k in total_other_losses else 0
-                        total_other_losses[k] = tmp_total_loss + ((other_loss.detach().item() / batch_world_size).item() *
+                        total_other_losses[k] = tmp_total_loss + ((other_loss / batch_world_size).item() *
                                                                   batch_anchor_size)
 
                 total_iter += batch_anchor_size

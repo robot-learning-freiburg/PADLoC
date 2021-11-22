@@ -93,7 +93,7 @@ class LCDNet(nn.Module):
             batch_dict['point_features_NV'] = batch_dict['point_features_NV'].permute(0, 2, 1, 3)
         # print(backbone_out.shape)
         # time1 = time.time()
-        if compute_embeddings and self.head != 'Transformer':
+        if compute_embeddings: # and self.head != 'Transformer':
             embedding = self.NV(batch_dict['point_features_NV'])
             # time2 = time.time()
             # print("NetVlad: ", time2-time1)

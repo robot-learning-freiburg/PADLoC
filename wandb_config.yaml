@@ -17,6 +17,7 @@
   # NETWORK PARAMS 3D
   "3D_net" : PVRCNN
   "head" : SuperGlue #PointNet
+  "desc_head": NetVLAD
   "load_semantic": False
   "load_panoptic": False
   "use_logits": False
