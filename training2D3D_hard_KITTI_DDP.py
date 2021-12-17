@@ -23,7 +23,7 @@ from datasets.KITTI360Dataset import KITTI3603DDictPairs, KITTI3603DPoses
 from datasets.KITTI_data_loader import KITTILoader3DPoses, KITTILoader3DDictPairs
 from datasets.NCLTDataset import NCLTDatasetPairs, NCLTDataset, NCLTDatasetTriplets
 from loss import smooth_metric_lossv2, NPair_loss, Circle_Loss, TripletLoss, sinkhorn_matches_loss, pose_loss,\
-    panoptic_mismatch_loss
+    panoptic_mismatch_loss, inverse_tf_loss
 from models.backbone3D.RandLANet.RandLANet import prepare_randlanet_input
 from models.backbone3D.RandLANet.helper_tool import ConfigSemanticKITTI2
 from models.get_models import get_model
@@ -377,6 +377,13 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                     raise NaNLossError("Panoptic Mismatch Loss has NaN.")
                 other_loss_dict["Loss: Panoptic Mismatch"] = loss_panoptic
                 total_loss = total_loss + exp_cfg['panoptic_weight'] * loss_panoptic
+
+            if exp_cfg['head'] == "Transformer":
+                loss_inv_tf = inverse_tf_loss(batch_dict)
+                if torch.any(torch.isnan(loss_inv_tf)):
+                    raise NaNLossError("Inverse Transform Loss has NaN.")
+                other_loss_dict["Loss: Inverse Transform"] = loss_inv_tf
+                total_loss = total_loss + exp_cfg['inv_tf_weight'] * loss_inv_tf
 
             if exp_cfg['weight_metric_learning'] > 0.:
                 if exp_cfg['norm_embeddings']:
@@ -850,7 +857,8 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                 os.mkdir(final_dest)
             wandb.save(f'{final_dest}/best_model_so_far.tar')
             #copy2('wandb_config.yaml', f'{final_dest}/wandb_config.yaml')
-            yaml.dump({'experiment': exp_cfg}, f'{final_dest}/wandb_config.yaml')
+            with open(f'{final_dest}/wandb_config.yaml', "w") as wandb_cfg_file:
+                yaml.dump({'experiment': exp_cfg}, wandb_cfg_file)
             wandb.save(f'{final_dest}/wandb_config.yaml')
         else:
             print('Saving checkpoints mod OFF.')
@@ -1161,7 +1169,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                                "Real AUC": auc2}, commit=False, step=epoch)
                 if total_other_losses:
                     for k, v in total_other_losses.items():
-                        wandb.log({k: v}, commit=False, step=epoch)
+                        wandb.log({k: v / len(train_sampler)}, commit=False, step=epoch)
 
                 wandb.log({"Training Loss": (total_train_loss / len(train_sampler))}, step=epoch)
 

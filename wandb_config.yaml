@@ -40,6 +40,7 @@
   "semantic_weight": 0.5 # Weight for the Semantic Class cost in the UOT algorithm's cost matrix
   "supersem_weight": 1 # Weight for the Semantic Superclass cost in the UOT algorithm's cost matrix
   "panoptic_weight": 2.e-7 # Weight for the Panoptic Label Mismatch loss
+  "inv_tf_weight" : 1 # Weight for the Reverse Transform Loss
   # KITTI
   "test_sequence": "08"
   "without_ground" : False

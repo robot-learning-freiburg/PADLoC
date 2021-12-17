@@ -303,7 +303,12 @@ def panoptic_mismatch_loss(batch_dict):
     transport_mat_rows[transport_mat_rows < 1e-6] = 1  # Ignore rows that add up to 0 (Set to one to avoid division by 0)
     transport_mat = transport_mat / transport_mat_rows
 
-    pinv_transport_mat = torch.pinverse(transport_mat)
+    #pinv_transport_mat = torch.pinverse(transport_mat)
+    pinv_transport_mat = batch_dict['transport2']  # Use the seccond transport matrix (from 1 to 2) as the inverse
+    pinv_transport_mat_cols = torch.sum(pinv_transport_mat, 1, keepdim=True)
+    pinv_transport_mat_cols[pinv_transport_mat_cols < 1e-6] = 1  # Ignore columns that add up to 0 (Set to one to avoid division by 0)
+    pinv_transport_mat = pinv_transport_mat / pinv_transport_mat_cols
+
     o1_mask = torch.matmul(transport_mat, pinv_transport_mat)
     B = transport_mat.shape[0]
     keypoint_idx = batch_dict['keypoint_idxs']
@@ -323,6 +328,32 @@ def panoptic_mismatch_loss(batch_dict):
 
     loss = torch.multiply(transf_o2, inv_masked_o1)
     loss = torch.square(loss)
-    loss = torch.sum(loss)
+    loss = torch.mean(loss)
+
+    return loss
+
+
+def inverse_tf_loss(batch_dict):
+    """
+        Loss of multiplying the transformation of PC1 -> PC2 and that of the reverse (PC2 -> PC1)
+        and comparing it to the identity matrix
+    """
+
+    tf_mat_a = batch_dict['transformation']
+    B = tf_mat_a.shape[0]
+    device = tf_mat_a.device
+
+    tf_mat = torch.zeros((B, 4, 4), device=device)
+    tf_mat[:, :3, :] = tf_mat_a
+    tf_mat[:, 3, 3] = 1.0
+
+    tf_mat_inv = torch.zeros((B, 4, 4), device=device)
+    tf_mat_inv[:, :3, :] = batch_dict['transformation2']
+    tf_mat_inv[:, 3, 3] = 1.0
+
+    loss = torch.bmm(tf_mat, tf_mat_inv)
+    loss = torch.eye(4, 4, device=device) - loss
+    loss = torch.square(loss)
+    loss = torch.mean(loss)
 
     return loss

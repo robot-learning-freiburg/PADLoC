@@ -129,8 +129,8 @@ class TransformerHead(nn.Module):
 
 		transformation2 = compute_rigid_transform(coords2, sinkhorn_matches2, row_sum2.squeeze(-1))
 
-		# batch_dict['sinkhorn_matches2'] = sinkhorn_matches2
-		# batch_dict['transport2'] = matching2
+		batch_dict['sinkhorn_matches2'] = sinkhorn_matches2
+		batch_dict['transport2'] = matching2
 		batch_dict['transformation2'] = transformation2
 
 		return batch_dict
