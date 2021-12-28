@@ -371,14 +371,14 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                 loss_rot = torch.tensor([0.], device=device)
 
             loss_panoptic = torch.zeros(1)
-            if exp_cfg['instance_matching_loss']:
+            if exp_cfg['panoptic_weight'] > 0:
                 loss_panoptic = panoptic_mismatch_loss(batch_dict)
                 if torch.any(torch.isnan(loss_panoptic)):
                     raise NaNLossError("Panoptic Mismatch Loss has NaN.")
                 other_loss_dict["Loss: Panoptic Mismatch"] = loss_panoptic
                 total_loss = total_loss + exp_cfg['panoptic_weight'] * loss_panoptic
 
-            if exp_cfg['head'] == "Transformer":
+            if exp_cfg['inv_tf_weight'] > 0 and exp_cfg['head'] == "Transformer":
                 loss_inv_tf = inverse_tf_loss(batch_dict)
                 if torch.any(torch.isnan(loss_inv_tf)):
                     raise NaNLossError("Inverse Transform Loss has NaN.")
@@ -401,7 +401,7 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                         pos_mask[i, i+batch_size] = 1
 
                 loss_metric_learning = loss_fn(model_out, pos_mask, neg_mask) * exp_cfg['weight_metric_learning']
-                if torch.any(torch.isnan(aux_loss)):
+                if torch.any(torch.isnan(loss_metric_learning)):
                     raise NaNLossError("Loss Metric Learning has NAN")
                 other_loss_dict['Loss: Metric Learning'] = loss_metric_learning
                 total_loss = total_loss + loss_metric_learning
@@ -1015,7 +1015,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         total_iter = 0
         store_data = False
 
-        print('Training')
+        print('\nTraining')
         print("="*40 + "\n")
         ## Training ##
         for batch_idx, sample in enumerate(TrainLoader):
@@ -1091,7 +1091,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                 total_iter += batch_anchor_size
 
         if rank == 0:
-            print("------------------------------------")
+            print("\n------------------------------------")
             print('epoch %d total training loss = %.3f' % (epoch, total_train_loss / len(train_sampler)))
             print('Total epoch time = %.2f' % (time.time() - epoch_start_time))
             print("------------------------------------\n")
@@ -1103,9 +1103,11 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         yaw_error_sum = 0
         emb_list = []
 
-        print('Testing')
-        print("="*40 + "\n")
         # Testing
+        if rank == 0:
+            print('\nTesting')
+            print("="*40 + "\n")
+
         if exp_cfg['weight_rot'] > 0. or exp_cfg['weight_transl'] > 0.:
             for batch_idx, sample in enumerate(TestLoader):
                 # break
@@ -1128,7 +1130,12 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                                                                     time.time() - start_time))
                         local_iter = 0.
 
+
         if exp_cfg['weight_metric_learning'] > 0.:
+            if rank == 0:
+                print('\nEvaluating with embeddings')
+                print("="*40 + "\n")
+
             for batch_idx, sample in enumerate(RecallLoader):
                 emb = get_database_embs(model, sample, exp_cfg, device)
                 dist.barrier()
@@ -1173,7 +1180,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
 
                 wandb.log({"Training Loss": (total_train_loss / len(train_sampler))}, step=epoch)
 
-            print("------------------------------------")
+            print("-" * 40)
             if exp_cfg['weight_metric_learning'] > 0.:
                 print(recall)
                 print("Max F1: ", maxF1)
@@ -1181,11 +1188,14 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                 print("Real AUC: ", auc2)
             print("Translation Error: ", final_transl_error)
             print("Rotation Error: ", final_yaw_error)
-            print("------------------------------------")
+            print("-" * 40)
 
             if epoch > swa_start and exp_cfg['scheduler'] == 'swa':
                 swa_model.update_parameters(model.module)
                 swa_scheduler.step()
+
+            print("\n Saving models and summaries:")
+            print("-" * 40)
 
             if final_yaw_error < best_rot_error:
                 best_rot_error = final_yaw_error
@@ -1198,6 +1208,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                         'optimizer': optimizer.state_dict(),
                         "Rotation Mean Error": final_yaw_error
                     }
+                    print(" * Best Yaw Error Model")
                     torch.save(best_model, savefilename)
                     if old_saved_file is not None:
                         os.remove(old_saved_file)
@@ -1223,6 +1234,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                     }
                     if args.wandb:
                         wandb.run.summary["best_recall_1"] = max_recall
+                        print(" * Best Recall Model")
                         torch.save(best_model_recall, savefilename_recall)
 
                         temp = f'{final_dest}/best_model_so_far_recall.tar'
@@ -1246,6 +1258,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                     }
                     if args.wandb:
                         wandb.run.summary["best_auc"] = max_auc
+                        print(" * Best AUC Model")
                         torch.save(best_model_auc, savefilename_auc)
 
                         temp = f'{final_dest}/best_model_so_far_auc.tar'
@@ -1262,6 +1275,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                     'state_dict': model.module.state_dict(),
                     'optimizer': optimizer.state_dict(),
                 }
+                print(" * Latest Model")
                 torch.save(best_model, savefilename)
 
     print('full training time = %.2f HR' % ((time.time() - start_full_time) / 3600))

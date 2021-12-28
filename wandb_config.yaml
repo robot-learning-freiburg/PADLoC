@@ -25,7 +25,7 @@
   "use_panoptic": False
   "model_norm": "batch"
   "num_points" : 4096
-  "feature_size" : 64
+  "feature_size" : 640
   "cluster_size" : 64
   "shared_embeddings": True
   "feature_output_dim_3D" : 256
@@ -36,7 +36,6 @@
   "loss_type": "triplet_random"
   "norm_embeddings": True
   "semantic_matching_cost": False
-  "instance_matching_loss": False
   "semantic_weight": 0.5 # Weight for the Semantic Class cost in the UOT algorithm's cost matrix
   "supersem_weight": 1 # Weight for the Semantic Superclass cost in the UOT algorithm's cost matrix
   "panoptic_weight": 2.e-7 # Weight for the Panoptic Label Mismatch loss
