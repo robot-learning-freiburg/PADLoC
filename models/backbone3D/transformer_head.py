@@ -41,6 +41,10 @@ class TransformerHead(nn.Module):
 		self._encoder_layer = nn.TransformerEncoderLayer(d_model=num_points, nhead=n_head)
 		self.encoder = nn.TransformerEncoder(self._encoder_layer, num_layers=n_layers)
 
+		panoptic_loss_weight = kwargs['panoptic_weight']
+		inverse_tf_loss_weight = kwargs['inv_tf_weight']
+		self._compute_reverse_tf = panoptic_loss_weight > 0 or inverse_tf_loss_weight > 0
+
 		# self._desc_decoder_layer = nn.TransformerDecoderLayer(d_model=num_points, nhead=1, dim_feedforward=256)
 		# self.desc_decoder = nn.TransformerDecoder(self._desc_decoder_layer, 1)
 
@@ -79,7 +83,7 @@ class TransformerHead(nn.Module):
 
 		P = 2 if mode == "pairs" else 3
 		B = B // P
-		src = src[:, :2*B, :].permute(1, 2, 0) # Only apply Q and
+		src = src[:, :2*B, :].permute(1, 2, 0)  # Only apply Q and
 		src = torch.unsqueeze(src, 1)
 
 		queries = torch.matmul(src, self.wQ)
@@ -88,14 +92,19 @@ class TransformerHead(nn.Module):
 		sqrt_key_size = np.sqrt(self.key_size)
 		attn1 = torch.matmul(queries[:B, :, :], keys_T[B:2*B, :, :])
 		attn1 = attn1 / sqrt_key_size
-		attn1 = torch.softmax(attn1, dim=2)
+		#attn1 = torch.softmax(attn1, dim=2)
 
 		# My Ideas: Sum up all the attention matrices and normalize them by rows to
 		# get the matching matrices
 
 		matching1 = torch.sum(attn1, 1)
+		matching1 = torch.relu(matching1)  # ReLU activation to remove negative values
 		# matching1 = torch.log(matching1)
-		matching1 = torch.softmax(matching1, dim=1)
+		#matching1 = torch.softmax(matching1, dim=1)
+		row_sum1 = matching1.sum(-1, keepdim=True)
+		row_sum1[row_sum1 == 0] = 1
+		row_sum1 = 1 / row_sum1
+		matching1 = torch.multiply(matching1, row_sum1)
 		row_sum1 = matching1.sum(-1, keepdim=True)
 
 		coords = points.view(P*B, -1, 4)
@@ -112,6 +121,9 @@ class TransformerHead(nn.Module):
 		batch_dict['transformation'] = transformation1
 		batch_dict['out_rotation'] = None
 		batch_dict['out_translation'] = None
+
+		if not self._compute_reverse_tf:
+			return batch_dict
 
 		# Do it in reverse (Queries from Anchor and Keys from Positive)
 		# and the resulting transform should be the inverse of the previous one
