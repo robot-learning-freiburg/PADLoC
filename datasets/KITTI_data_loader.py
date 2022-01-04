@@ -41,8 +41,15 @@ def get_velo(idx, dir, sequence, without_ground, jitter=False):
     return scan
 
 
-def get_velo_with_panoptic(idx, dir, sequence, use_semantic=True, use_panoptic=False, jitter=False, use_logits=True):
-    velo_path = os.path.join(dir, 'sequences', f'{int(sequence):02d}', 'velodyne', f'{idx:06d}.bin')
+def get_velo_with_panoptic(idx, kitti_dir, sequence, **kwargs):
+
+    use_semantic = kwargs.get("use_semantic", True)
+    use_panoptic = kwargs.get("use_panotpic", False)
+    jitter = kwargs.get("jitter", False)
+    use_logits = kwargs.get("use_logits", True)
+    filter_dynamic_classes = kwargs.get("filter_dynamic", False)
+
+    velo_path = os.path.join(kitti_dir, 'sequences', f'{int(sequence):02d}', 'velodyne', f'{idx:06d}.bin')
     scan = np.fromfile(velo_path, dtype=np.float32)
     scan = scan.reshape((-1, 4))
 
@@ -51,9 +58,9 @@ def get_velo_with_panoptic(idx, dir, sequence, use_semantic=True, use_panoptic=F
         noise = np.clip(noise, -0.05, 0.05)
         scan = scan + noise
 
-    if use_logits:
+    if use_logits and not filter_dynamic_classes:
 
-        panoptic_path = os.path.join(dir, 'sequences', f'{int(sequence):02d}',
+        panoptic_path = os.path.join(kitti_dir, 'sequences', f'{int(sequence):02d}',
                                      'labels', f'{idx:06d}.label')
         panoptic = np.fromfile(panoptic_path, dtype=np.float32)
         panoptic = panoptic.reshape(scan.shape[0], -1)
@@ -71,7 +78,7 @@ def get_velo_with_panoptic(idx, dir, sequence, use_semantic=True, use_panoptic=F
             assert logits.shape[1] <= 56, "Panoptic Logits Shape Error"
             logits = np.pad(logits, pad_width, constant_values=0)
     else:
-        panoptic_path = os.path.join(dir, 'sequences', f'{int(sequence):02d}',
+        panoptic_path = os.path.join(kitti_dir, 'sequences', f'{int(sequence):02d}',
                                       'labels', f'{idx:06d}.label')
         panoptic = np.fromfile(panoptic_path, dtype=np.int32)
         panoptic = panoptic.reshape(scan.shape[0], -1)
@@ -79,6 +86,49 @@ def get_velo_with_panoptic(idx, dir, sequence, use_semantic=True, use_panoptic=F
         semantic = np.bitwise_and(panoptic, 0xFFFF).astype(np.float32)
         instance = np.right_shift(panoptic, 16).astype(np.float32)
         panoptic = panoptic.astype(np.float32)
+
+        if filter_dynamic_classes:
+
+            dynamic_classes = kwargs.get("dynamic_classes") or [
+                1,  # Outlier
+                # Vehicles
+                10,  # Car
+                11,  # Bicycle
+                13,  # Bus
+                15,  # Motorcycle
+                16,  # On-Rails
+                18,  # Truck
+                20,  # Other-Vehicle
+
+                # Moving Vehicles
+                252,  # Moving-Car
+                257,  # Moving-Bus
+                256,  # Moving-On-Rails
+                258,  # Moving-Truck
+                259,  # Moving-Other-Vehicle
+
+                # People
+                30,  # Person
+                31,  # Bicyclist
+                32,  # Motorcyclist
+
+                # Moving People
+                254,  # Moving-Person
+                253,  # Moving-Bicyclist
+                255,  # Moving-Motorcyclist
+            ]
+
+            mask = np.ones_like(semantic)
+
+            for k in dynamic_classes:
+                mask = np.logical_and(mask, semantic != k)
+
+            mask = np.where(mask)[0]
+
+            scan = scan[mask]
+            panoptic = panoptic[mask]
+            semantic = semantic[mask]
+            instance = instance[mask]
 
         logits = (panoptic, semantic, instance)
 
@@ -174,6 +224,9 @@ class KITTILoader3DPoses(Dataset):
         self.use_semantic = kwargs.get("use_semantic", False)
         self.use_panoptic = kwargs.get("use_panoptic", False)
         self.use_logits = kwargs.get("use_logits", True)
+        self.filter_dynamic = kwargs.get("filter_dynamic", False)
+        self.dynamic_classes = kwargs.get("dynamic_classes")
+
         data = read_calib_file(os.path.join(dir, 'sequences', sequence, 'calib.txt'))
         cam0_to_velo = np.reshape(data['Tr'], (3, 4))
         cam0_to_velo = np.vstack([cam0_to_velo, [0, 0, 0, 1]])
@@ -211,10 +264,14 @@ class KITTILoader3DPoses(Dataset):
 
     def __getitem__(self, idx):
 
-        if self.use_panoptic or self.use_semantic:
+        if self.use_panoptic or self.use_semantic or self.filter_dynamic:
             anchor_pcd, anchor_logits = get_velo_with_panoptic(idx, self.dir, self.sequence,
-                                                               self.use_semantic, self.use_panoptic, self.jitter,
-                                                               self.use_logits)
+                                                               use_semantic=self.use_semantic,
+                                                               use_panoptic=self.use_panoptic,
+                                                               jitter=self.jitter,
+                                                               use_logits=self.use_logits,
+                                                               filter_dynamic=self.filter_dynamic,
+                                                               dynamic_classes=self.dynamic_classes)
             anchor_pcd = torch.from_numpy(anchor_pcd)
         else:
             anchor_pcd = torch.from_numpy(get_velo(idx, self.dir, self.sequence, self.without_ground, self.jitter))
@@ -249,16 +306,24 @@ class KITTILoader3DPoses(Dataset):
                 elif distance > 25 and idx == negative_idx:  # 1.5 < dist < 2.5 -> unknown
                     negative_idx = i
                     cont += 1
-            if self.use_panoptic or self.use_semantic:
+            if self.use_panoptic or self.use_semantic or self.filter_dynamic:
                 positive_pcd, positive_logits = get_velo_with_panoptic(positive_idx, self.dir, self.sequence,
-                                                                   self.use_semantic, self.use_panoptic, self.jitter,
-                                                                       self.use_logits)
+                                                                       use_semantic=self.use_semantic,
+                                                                       use_panoptic=self.use_panoptic,
+                                                                       jitter=self.jitter,
+                                                                       use_logits=self.use_logits,
+                                                                       filter_dynamic=self.filter_dynamic,
+                                                                       dynamic_classes=self.dynamic_classes)
                 positive_pcd = torch.from_numpy(positive_pcd)
 
 
                 negative_pcd, negative_logits = get_velo_with_panoptic(negative_idx, self.dir, self.sequence,
-                                                                       self.use_semantic, self.use_panoptic, self.jitter,
-                                                                       self.use_logits)
+                                                                       use_semantic=self.use_semantic,
+                                                                       use_panoptic=self.use_panoptic,
+                                                                       jitter=self.jitter,
+                                                                       use_logits=self.use_logits,
+                                                                       filter_dynamic=self.filter_dynamic,
+                                                                       dynamic_classes=self.dynamic_classes)
                 negative_pcd = torch.from_numpy(negative_pcd)
 
             else:
@@ -359,6 +424,8 @@ class KITTILoader3DDictPairs(Dataset):
         self.use_semantic = kwargs.get("use_semantic", False)
         self.use_panoptic = kwargs.get("use_panoptic", False)
         self.use_logits = kwargs.get("use_logits", False)
+        self.filter_dynamic = kwargs.get("filter_dynamic", False)
+        self.dynamic_classes = kwargs.get("dynamic_classes")
         data = read_calib_file(os.path.join(dir, 'sequences', sequence, 'calib.txt'))
         cam0_to_velo = np.reshape(data['Tr'], (3, 4))
         cam0_to_velo = np.vstack([cam0_to_velo, [0, 0, 0, 1]])
@@ -397,11 +464,14 @@ class KITTILoader3DDictPairs(Dataset):
         if frame_idx >= len(self.poses):
             print(f"ERRORE: sequence {self.sequence}, frame idx {frame_idx} ")
 
-        if self.use_panoptic or self.use_semantic:
+        if self.use_panoptic or self.use_semantic or self.filter_dynamic:
             anchor_pcd, anchor_logits = get_velo_with_panoptic(frame_idx, self.dir, self.sequence,
                                                                use_semantic=self.use_semantic,
-                                                               use_panoptic=self.use_panoptic, jitter=self.jitter,
-                                                               use_logits=self.use_logits)
+                                                               use_panoptic=self.use_panoptic,
+                                                               jitter=self.jitter,
+                                                               use_logits=self.use_logits,
+                                                               filter_dynamic=self.filter_dynamic,
+                                                               dynamic_classes=self.dynamic_classes)
             anchor_pcd = torch.from_numpy(anchor_pcd)
 
             #Random permute points
@@ -423,10 +493,14 @@ class KITTILoader3DDictPairs(Dataset):
 
         positive_idx = np.random.choice(self.loop_gt[idx]['positive_idxs'])
 
-        if self.use_panoptic or self.use_semantic:
+        if self.use_panoptic or self.use_semantic or self.filter_dynamic:
             positive_pcd, positive_logits = get_velo_with_panoptic(positive_idx, self.dir, self.sequence,
-                                                               self.use_semantic, self.use_panoptic, self.jitter,
-                                                                   use_logits=self.use_logits)
+                                                                   use_semantic=self.use_semantic,
+                                                                   use_panotpic=self.use_panoptic,
+                                                                   jitter=self.jitter,
+                                                                   use_logits=self.use_logits,
+                                                                   filter_dynamic=self.filter_dynamic,
+                                                                   dynamic_classes=self.dynamic_classes)
             positive_pcd = torch.from_numpy(positive_pcd)
 
             #Random permute points
@@ -495,6 +569,9 @@ class KITTILoader3DDictTriplets(Dataset):
         self.hard_negative = kwargs.get("hard_negative", False)
         self.use_semantic = kwargs.get("use_semantic", False)
         self.use_panoptic = kwargs.get("use_panoptic", False)
+        self.filter_dynamic = kwargs.get("filter_dynamic", False)
+        self.dynamic_classes = kwargs.get("dynamic_classes")
+
         data = read_calib_file(os.path.join(dir, 'sequences', sequence, 'calib.txt'))
         cam0_to_velo = np.reshape(data['Tr'], (3, 4))
         cam0_to_velo = np.vstack([cam0_to_velo, [0, 0, 0, 1]])
@@ -534,10 +611,14 @@ class KITTILoader3DDictTriplets(Dataset):
         if frame_idx >= len(self.poses):
             print(f"ERRORE: sequence {self.sequence}, frame idx {frame_idx} ")
 
-        if self.use_panoptic or self.use_semantic:
+        if self.use_panoptic or self.use_semantic or self.filter_dynamic:
             anchor_pcd, anchor_logits = get_velo_with_panoptic(frame_idx, self.dir, self.sequence,
-                                                               self.use_semantic, self.use_panoptic, self.jitter,
-                                                               use_logits=self.use_logits)
+                                                               use_semantic=self.use_semantic,
+                                                               use_panotpic=self.use_panoptic,
+                                                               jitter=self.jitter,
+                                                               use_logits=self.use_logits,
+                                                               filter_dynamic=self.filter_dynamic,
+                                                               dynamic_classes=self.dynamic_classes)
             anchor_pcd = torch.from_numpy(anchor_pcd)
 
             #Random permute points
@@ -556,10 +637,14 @@ class KITTILoader3DDictTriplets(Dataset):
         anchor_transl = torch.tensor(anchor_pose[:3, 3], dtype=torch.float32)
 
         positive_idx = np.random.choice(self.loop_gt[idx]['positive_idxs'])
-        if self.use_panoptic or self.use_semantic:
+        if self.use_panoptic or self.use_semantic or self.filter_dynamic:
             positive_pcd, positive_logits = get_velo_with_panoptic(positive_idx, self.dir, self.sequence,
-                                                                   self.use_semantic, self.use_panoptic, self.jitter,
-                                                                   use_logits=self.use_logits)
+                                                                   use_semantic=self.use_semantic,
+                                                                   use_panoptic=self.use_panoptic,
+                                                                   jitter=self.jitter,
+                                                                   use_logits=self.use_logits,
+                                                                   filter_dynamic=self.filter_dynamic,
+                                                                   dynamic_classes=self.dynamic_classes)
             positive_pcd = torch.from_numpy(positive_pcd)
 
             #Random permute points
@@ -584,10 +669,14 @@ class KITTILoader3DDictTriplets(Dataset):
         else:
             negative_idx = np.random.choice(self.loop_gt[idx]['negative_idxs'])
 
-        if self.use_panoptic or self.use_semantic:
+        if self.use_panoptic or self.use_semantic or self.filter_dynamic:
             negative_pcd, negative_logits = get_velo_with_panoptic(negative_idx, self.dir, self.sequence,
-                                                                   self.use_semantic, self.use_panoptic, self.jitter,
-                                                                   use_logits=self.use_logits)
+                                                                   use_semantic=self.use_semantic,
+                                                                   use_panoptic=self.use_panoptic,
+                                                                   jitter=self.jitter,
+                                                                   use_logits=self.use_logits,
+                                                                   filter_dynamic=self.filter_dynamic,
+                                                                   dynamic_classes=self.dynamic_classes)
             negative_pcd = torch.from_numpy(negative_pcd)
 
             #Random permute points

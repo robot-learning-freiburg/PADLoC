@@ -682,6 +682,8 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     cfg_load_panoptic = exp_cfg.get("load_panoptic", False)
     cfg_use_semantic = exp_cfg.get("use_semantic", False)
     cfg_use_panoptic = exp_cfg.get("use_panoptic", False)
+    cfg_filter_dynamic = exp_cfg.get("filter_dynamic", False)
+    cfg_dynamic_classes = exp_cfg.get("dynamic_classes")
     cfg_instance_matching_loss = exp_cfg.get("instance_matching_loss", False)
     cfg_semantic_matching_cost = exp_cfg.get("semantic_matching_cost", False)
     exp_cfg["load_semantic"] = cfg_load_semantic
@@ -690,6 +692,8 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     exp_cfg["use_panoptic"] = cfg_use_panoptic
     exp_cfg["instance_matching_loss"] = cfg_instance_matching_loss
     exp_cfg["semantic_matching_cost"] = cfg_semantic_matching_cost
+    exp_cfg["filter_dynamic"] = cfg_filter_dynamic
+    exp_cfg["dynamic_classes"] = cfg_dynamic_classes
 
     load_semantic = cfg_load_semantic or cfg_use_semantic or cfg_instance_matching_loss or cfg_semantic_matching_cost
     load_panoptic = cfg_load_panoptic or cfg_use_panoptic or cfg_instance_matching_loss or cfg_semantic_matching_cost
@@ -708,7 +712,10 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                                                                          jitter=exp_cfg['point_cloud_jitter'],
                                                                          use_semantic=load_semantic,
                                                                          use_panoptic=load_panoptic,
-                                                                         use_logits=use_logits)
+                                                                         use_logits=use_logits,
+                                                                         filter_dynamic=exp_cfg["filter_dynamic"],
+                                                                         dynamic_classes=exp_cfg["dynamic_classes"]
+                                                                         )
         else:
             training_dataset, dataset_list_train = datasets_concat_kitti_triplets(args.data,
                                                                                    sequences_training,
@@ -722,17 +729,26 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                                                                                    use_semantic=load_semantic,
                                                                                    use_panoptic=load_panoptic,
                                                                                    jitter=exp_cfg['point_cloud_jitter'],
-                                                                                  use_logits=use_logits)
+                                                                                  use_logits=use_logits,
+                                                                                  filter_dynamic=exp_cfg["filter_dynamic"],
+                                                                                  dynamic_classes=exp_cfg["dynamic_classes"]
+                                                                                  )
         validation_dataset = KITTILoader3DDictPairs(args.data, sequences_validation[0],
                                                     os.path.join(args.data, 'sequences', sequences_validation[0], 'poses.txt'),
                                                     exp_cfg['num_points'], device, without_ground=exp_cfg['without_ground'],
                                                     loop_file=exp_cfg['loop_file'], use_semantic=load_semantic,
-                                                    use_panoptic=load_panoptic, use_logits=use_logits)
+                                                    use_panoptic=load_panoptic, use_logits=use_logits,
+                                                    filter_dynamic=exp_cfg["filter_dynamic"],
+                                                    dynamic_classes=exp_cfg["dynamic_classes"]
+                                                    )
         dataset_for_recall = KITTILoader3DPoses(args.data, sequences_validation[0],
                                                 os.path.join(args.data, 'sequences', sequences_validation[0], 'poses.txt'),
                                                 exp_cfg['num_points'], device, train=False, use_semantic=load_semantic,
                                                 use_panoptic=load_panoptic, without_ground=exp_cfg['without_ground'],
-                                                loop_file=exp_cfg['loop_file'], use_logits=use_logits)
+                                                loop_file=exp_cfg['loop_file'], use_logits=use_logits,
+                                                filter_dynamic=exp_cfg["filter_dynamic"],
+                                                dynamic_classes=exp_cfg["dynamic_classes"]
+                                                )
     elif args.dataset == 'kitti360':
         training_dataset, dataset_list_train = datasets_concat_kitti360(args.data,
                                                                         sequences_training,
