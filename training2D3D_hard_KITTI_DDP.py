@@ -649,10 +649,11 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     dt_string_folder = current_date.strftime(dt_folder_fmt)
 
     resume_wandb = False
-    if args.weights is not None:
+    if args.weights is not None and args.resume:
         weight_dir = os.path.dirname(args.weights).split(os.path.sep)[-1]
         dt_string_folder = weight_dir
         dt_string = datetime.strptime(dt_string_folder, dt_folder_fmt).strftime(dt_fmt)
+        print("\n\n Resuming training from " + dt_string)
         resume_wandb = True
 
     workers = exp_cfg.get("num_workers") or 2
@@ -876,6 +877,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
             with open(f'{final_dest}/wandb_config.yaml', "w") as wandb_cfg_file:
                 yaml.dump({'experiment': exp_cfg}, wandb_cfg_file)
             wandb.save(f'{final_dest}/wandb_config.yaml')
+            print("Tracking wandb_config and best_model_so_far.tar files for WandB.")
         else:
             print('Saving checkpoints mod OFF.')
 
@@ -883,10 +885,54 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         print(len(TestLoader))
 
     model = get_model(exp_cfg)
+
+    model_params = {k: p for k, p in model.named_parameters()}
+    frozen_params = set([])
+    unfrozen_params = set([])
+
     if args.weights is not None:
-        print('Loading pre-trained params...')
+        print('\n\nLoading pre-trained params from ' + args.weights)
         saved_params = torch.load(args.weights, map_location='cpu')
-        model.load_state_dict(saved_params['state_dict'])
+        missing_keys, unexpected_keys = model.load_state_dict(saved_params['state_dict'],
+                                                              strict=args.strict_weight_load)
+
+        loaded_keys = [p for p in model.state_dict().keys()
+                         if p not in missing_keys and p not in unexpected_keys]
+        # loaded_params = [p for p in model_params if p in loaded_keys]
+
+        if loaded_keys:
+            print("Loaded values: " + str(len(loaded_keys)))
+            print(" - " + "\n - ".join(loaded_keys))
+        if missing_keys:
+            print("Missing parameters: " + str(len(missing_keys)))
+            print(" - " + "\n - ".join(missing_keys))
+        if unexpected_keys:
+            print("Unexpected parameters found in checkpoint: " + str(len(unexpected_keys)))
+            print(" - " + "\n - ".join(unexpected_keys))
+
+        if args.freeze_loaded_weights:
+            for param_name, param in model_params.items():
+                if param_name in loaded_keys and param.requires_grad:
+                    param.requires_grad = False
+                    frozen_params.add(param_name)
+
+    if args.freeze_weights_containing:
+        for param_name, param in model_params.items():
+            if any(param_str in param_name for param_str in args.freeze_weights_containing) and param.requires_grad:
+                param.requires_grad = False
+                frozen_params.add(param_name)
+
+    if args.unfreeze_weights_containing:
+        for param_name, param in model_params.items():
+            if any(param_str in param_name for param_str in args.unfreeze_weights_containing) and param_name in frozen_params:
+                param.requires_grad = True
+                unfrozen_params.add(param_name)
+                if param_name in frozen_params:
+                    frozen_params.remove(param_name)
+
+    if frozen_params:
+        print("\n\nFrozen Parameters: " + str(len(frozen_params)))
+        print(" - " + "\n - ".join(frozen_params))
 
     # if torch.cuda.device_count() > 1:
     #     model = torch.nn.DataParallel(model)
@@ -1318,6 +1364,9 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         torch.save(best_model, savefilename)
         wandb.save(savefilename)
 
+    if args.wandb and rank == 0:
+        wandb.finish()
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -1339,6 +1388,17 @@ if __name__ == '__main__':
     parser.add_argument('--gpu_count', type=int, default=-1)
     parser.add_argument('--port', type=str, default='8888')
     parser.add_argument('--weights', type=str, default=None)
+    parser.add_argument('--strict_weight_load', action='store_true', default=False,
+                        help='Loads saved weights only if all keys and shapes match.')
+    parser.add_argument('--freeze_loaded_weights', action='store_true', default=False,
+                        help='Freeze all of the loaded weights,'
+                             'so that only parameters not in the loaded checkpoint are trained.')
+    parser.add_argument('--freeze_weights_containing', type=str, default='',
+                        help='Comma separated list of strings to be matched with the model\'s parameter names'
+                             ' to become frozen during training.')
+    parser.add_argument('--unfreeze_weights_containing', type=str, default='',
+                        help='Comma separated list of strings to be matched with the model\'s parameter names'
+                             ' to be unfrozen.')
     parser.add_argument('--resume', action='store_true')
 
     parser.add_argument('--config', default="wandb_config.yaml")
@@ -1351,6 +1411,9 @@ if __name__ == '__main__':
     # if args.device is not None and not args.no_cuda:
     #     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     #     os.environ["CUDA_VISIBLE_DEVICES"] = args.device
+
+    args.freeze_weights_containing = list(filter(None, args.freeze_weights_containing.split(",")))
+    args.unfreeze_weights_containing = list(filter(None, args.unfreeze_weights_containing.split(",")))
 
     if not args.wandb:
         os.environ['WANDB_MODE'] = 'dryrun'
