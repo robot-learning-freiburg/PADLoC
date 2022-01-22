@@ -900,15 +900,16 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                          if p not in missing_keys and p not in unexpected_keys]
         # loaded_params = [p for p in model_params if p in loaded_keys]
 
-        if loaded_keys:
-            print("Loaded values: " + str(len(loaded_keys)))
-            print(" - " + "\n - ".join(loaded_keys))
-        if missing_keys:
-            print("Missing parameters: " + str(len(missing_keys)))
-            print(" - " + "\n - ".join(missing_keys))
-        if unexpected_keys:
-            print("Unexpected parameters found in checkpoint: " + str(len(unexpected_keys)))
-            print(" - " + "\n - ".join(unexpected_keys))
+        if rank == 0:
+            if loaded_keys:
+                print("Loaded values: " + str(len(loaded_keys)))
+                print(" - " + "\n - ".join(loaded_keys))
+            if missing_keys:
+                print("Missing parameters: " + str(len(missing_keys)))
+                print(" - " + "\n - ".join(missing_keys))
+            if unexpected_keys:
+                print("Unexpected parameters found in checkpoint: " + str(len(unexpected_keys)))
+                print(" - " + "\n - ".join(unexpected_keys))
 
         if args.freeze_loaded_weights:
             for param_name, param in model_params.items():
@@ -930,9 +931,10 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                 if param_name in frozen_params:
                     frozen_params.remove(param_name)
 
-    if frozen_params:
-        print("\n\nFrozen Parameters: " + str(len(frozen_params)))
-        print(" - " + "\n - ".join(frozen_params))
+    if rank == 0:
+        if frozen_params:
+            print("\n\nFrozen Parameters: " + str(len(frozen_params)))
+            print(" - " + "\n - ".join(frozen_params))
 
     # if torch.cuda.device_count() > 1:
     #     model = torch.nn.DataParallel(model)
@@ -1077,8 +1079,9 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         total_iter = 0
         store_data = False
 
-        print('\nTraining')
-        print("="*40 + "\n")
+        if rank == 0:
+            print('\nTraining')
+            print("="*40 + "\n")
         ## Training ##
         for batch_idx, sample in enumerate(TrainLoader):
             # break

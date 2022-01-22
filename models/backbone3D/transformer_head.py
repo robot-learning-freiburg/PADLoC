@@ -81,8 +81,8 @@ class TransformerHead(nn.Module):
 
 		mode = kwargs.get("mode") or "pairs"
 
-		P = 2 if mode == "pairs" else 3
-		B = B // P
+		T = 2 if mode == "pairs" else 3
+		B = B // T
 		src = src[:, :2*B, :].permute(1, 2, 0)  # Only apply Q and
 		src = torch.unsqueeze(src, 1)
 
@@ -107,9 +107,9 @@ class TransformerHead(nn.Module):
 		matching1 = torch.multiply(matching1, row_sum1)
 		row_sum1 = matching1.sum(-1, keepdim=True)
 
-		coords = points.view(P*B, -1, 4)
-		coords1 = coords[:B, :, 1:]
-		coords2 = coords[B:2*B, :, 1:]
+		coords = points.view(T*B, P, 4)[:, :, 1:]
+		coords1 = coords[:B, :, :]
+		coords2 = coords[B:2*B, :, :]
 
 		sinkhorn_matches1 = torch.matmul(matching1, coords2)
 
