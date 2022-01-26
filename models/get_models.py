@@ -98,6 +98,7 @@ def get_model(exp_cfg, is_training=True):
             pvrcnn_cfg.MODEL.PFE.NUM_OUTPUT_FEATURES = exp_cfg['feature_size']
             if 'PC_RANGE' in exp_cfg:
                 pvrcnn_cfg.DATA_CONFIG.POINT_CLOUD_RANGE = exp_cfg['PC_RANGE']
+            exp_cfg['PC_RANGE'] = pvrcnn_cfg.DATA_CONFIG.POINT_CLOUD_RANGE
             pvrcnn = PVRCNN(pvrcnn_cfg, is_training, exp_cfg['model_norm'], exp_cfg['shared_embeddings'],
                             exp_cfg['use_semantic'], exp_cfg['use_panoptic'])
 
