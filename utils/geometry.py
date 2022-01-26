@@ -72,9 +72,12 @@ def mat2xyzrpy(rotmatrix):
     Returns:
         torch.Tensor: shape=[6], contains xyzrpy
     """
-    roll = math.atan2(-rotmatrix[1, 2], rotmatrix[2, 2])
-    pitch = math.asin(rotmatrix[0, 2])
-    yaw = math.atan2(-rotmatrix[0, 1], rotmatrix[0, 0])
+    try:
+        roll = math.atan2(-rotmatrix[1, 2], rotmatrix[2, 2])
+        pitch = math.asin(rotmatrix[0, 2])
+        yaw = math.atan2(-rotmatrix[0, 1], rotmatrix[0, 0])
+    except ValueError as e:
+        raise ValueError("Unable to decompose Rotation Matrix: " + str(rotmatrix) + " into RPY.") from e
     x = rotmatrix[:3, 3][0]
     y = rotmatrix[:3, 3][1]
     z = rotmatrix[:3, 3][2]
