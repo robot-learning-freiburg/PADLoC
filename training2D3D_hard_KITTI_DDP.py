@@ -653,7 +653,8 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         weight_dir = os.path.dirname(args.weights).split(os.path.sep)[-1]
         dt_string_folder = weight_dir
         dt_string = datetime.strptime(dt_string_folder, dt_folder_fmt).strftime(dt_fmt)
-        print("\n\n Resuming training from " + dt_string)
+        if rank == 0:
+            print("\n\n Resuming training from " + dt_string)
         resume_wandb = True
 
     workers = exp_cfg.get("num_workers") or 2
@@ -891,7 +892,8 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     unfrozen_params = set([])
 
     if args.weights is not None:
-        print('\n\nLoading pre-trained params from ' + args.weights)
+        if rank == 0:
+            print('\n\nLoading pre-trained params from ' + args.weights)
         saved_params = torch.load(args.weights, map_location='cpu')
         missing_keys, unexpected_keys = model.load_state_dict(saved_params['state_dict'],
                                                               strict=args.strict_weight_load)

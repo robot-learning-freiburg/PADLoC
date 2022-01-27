@@ -74,7 +74,10 @@ def mat2xyzrpy(rotmatrix):
     """
     try:
         roll = math.atan2(-rotmatrix[1, 2], rotmatrix[2, 2])
-        pitch = math.asin(rotmatrix[0, 2])
+        try:
+            pitch = math.asin(rotmatrix[0, 2])
+        except ValueError:
+            pitch = math.atan2(-rotmatrix[2, 0], math.sqrt((rotmatrix[2, 1] ** 2) + (rotmatrix[2, 2] ** 2)))
         yaw = math.atan2(-rotmatrix[0, 1], rotmatrix[0, 0])
     except ValueError as e:
         raise ValueError("Unable to decompose Rotation Matrix: " + str(rotmatrix) + " into RPY.") from e
