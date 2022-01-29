@@ -361,7 +361,7 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                     if exp_cfg['head'] == "SuperGlue" and exp_cfg['sinkhorn_type'] == 'slack':
                         inlier_loss = (1 - batch_dict['transport'].sum(dim=1)).mean()
                         inlier_loss += (1 - batch_dict['transport'].sum(dim=2)).mean()
-                        if torch.any(torch.isnan(aux_loss)):
+                        if torch.any(torch.isnan(inlier_loss)):
                             raise NaNLossError("Sinkhorn Inlier Loss has NAN")
                         other_loss_dict["Loss: Inlier"] = inlier_loss
                         loss_rot += 0.01 * inlier_loss
@@ -873,11 +873,11 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
             final_dest = args.checkpoints_dest + '/' + exp_cfg['training_type'] + '/' + dt_string_folder
             if not os.path.exists(final_dest):
                 os.mkdir(final_dest)
-            wandb.save(f'{final_dest}/best_model_so_far.tar')
+            wandb.save(f'{final_dest}/best_model_so_far.tar', base_path=final_dest)
             #copy2('wandb_config.yaml', f'{final_dest}/wandb_config.yaml')
             with open(f'{final_dest}/wandb_config.yaml', "w") as wandb_cfg_file:
                 yaml.dump({'experiment': exp_cfg}, wandb_cfg_file)
-            wandb.save(f'{final_dest}/wandb_config.yaml')
+            wandb.save(f'{final_dest}/wandb_config.yaml', base_path=final_dest)
             print("Tracking wandb_config and best_model_so_far.tar files for WandB.")
         else:
             print('Saving checkpoints mod OFF.')
@@ -1219,6 +1219,9 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                         interleaved_out[current_rank::world_size] = out_emb[current_rank]
                     emb_list.append(interleaved_out.detach().clone())
 
+                    if batch_idx % 20 == 0 and batch_idx != 0:
+                        print('Iter %d / %d evaluation' % (batch_idx, len(RecallLoader)))
+
         if rank == 0:
             if exp_cfg['weight_metric_learning'] > 0.:
                 emb_list = torch.cat(emb_list)
@@ -1282,7 +1285,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                     wandb.run.summary["best_rot_error"] = final_yaw_error
                     temp = f'{final_dest}/best_model_so_far_rot.tar'
                     torch.save(best_model, temp)
-                    wandb.save(temp)
+                    wandb.save(temp, base_path=final_dest)
                     old_saved_file = savefilename
 
             if exp_cfg['weight_metric_learning'] > 0.:
@@ -1306,7 +1309,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
 
                         temp = f'{final_dest}/best_model_so_far_recall.tar'
                         torch.save(best_model_recall, temp)
-                        wandb.save(temp)
+                        wandb.save(temp, base_path=final_dest)
                         if old_saved_file_recall is not None:
                             os.remove(old_saved_file_recall)
                         old_saved_file_recall = savefilename_recall
@@ -1330,7 +1333,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
 
                         temp = f'{final_dest}/best_model_so_far_auc.tar'
                         torch.save(best_model_auc, temp)
-                        wandb.save(temp)
+                        wandb.save(temp, base_path=final_dest)
                         if old_saved_file_auc is not None:
                             os.remove(old_saved_file_auc)
                         old_saved_file_auc = savefilename_auc
@@ -1367,7 +1370,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
             'optimizer': optimizer.state_dict(),
         }
         torch.save(best_model, savefilename)
-        wandb.save(savefilename)
+        wandb.save(savefilename, base_path=final_dest)
 
     if args.wandb and rank == 0:
         wandb.finish()
