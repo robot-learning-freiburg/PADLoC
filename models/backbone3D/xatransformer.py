@@ -193,7 +193,7 @@ class XATransformerDecoder(nn.Module):
 		self.attention_cross = []
 
 		for mod in self.layers:
-			output, attn_self, attn_cross = mod(tgt_k=tgt_k, tgt_q=tgt_q, tgt_v=output,
+			output, attn_self, attn_cross = mod(tgt_k=output, tgt_q=tgt_q, tgt_v=output,
 												src_k=src_k, src_q=src_q,
 												tgt_mask=tgt_mask,
 												src_mask=src_mask,

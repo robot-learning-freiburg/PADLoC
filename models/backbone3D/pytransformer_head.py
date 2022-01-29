@@ -5,6 +5,7 @@ from .heads import compute_rigid_transform
 from .xatransformer import XATransformerEncoder, XATransformerDecoder,\
 	XATransformerEncoderLayer, XATransformerDecoderLayer
 from .positional_encoder import PositionalEncodingCart3D
+from utils.tools import SVDNonConvergenceError
 
 
 class PyTransformerHead(nn.Module):
@@ -16,7 +17,7 @@ class PyTransformerHead(nn.Module):
 
 		super(PyTransformerHead, self).__init__()
 
-		self._pe_weight = kwargs.get("position_encoder_weight") or 1
+		self._pe_weight = kwargs.get("position_encoder_weight", 1)
 		feat_size = kwargs['feature_size']
 
 		self.descriptor_head = kwargs['desc_head']
@@ -72,7 +73,7 @@ class PyTransformerHead(nn.Module):
 		coords = coords.view(d_bt, d_p, 4)[:, :, 1:]
 
 		if self._pe_weight:
-			src = F.normalize(src, dim=0)
+			src = F.normalize(src, dim=2)
 			pe = self._positional_encoding(coords)
 			if self._pe_weight != 1.0:
 				pe = self._pe_weight * pe
@@ -82,24 +83,39 @@ class PyTransformerHead(nn.Module):
 		coords1 = coords[:, :d_b, :]  # Coordinates of PC1
 		coords2 = coords[:, d_b:2*d_b, :]  # Coordinates of PC2
 
-		src = self.sa_encoder(src=src)
+		attn_feats = self.sa_encoder(src=src)
 
-		batch_dict['attention_features'] = src
+		src1 = attn_feats[:, :d_b, :]  # Attention Features of PC1
+		src2 = attn_feats[:, d_b:2*d_b, :]  # Attention Features of PC2
 
-		src1 = src[:, :d_b, :]  # Attention Features of PC1
-		src2 = src[:, d_b:2*d_b, :]  # Attention Features of PC2
+		matches = self.xa_decoder(tgt_k=coords2, tgt_q=coords1, tgt_v=coords2,
+								  src_k=src2, src_q=src1)
 
-		matches = self.xa_decoder(tgt_k=coords1, tgt_q=coords2, tgt_v=coords2,
-								  src_k=src1, src_q=src2)
-
-		batch_dict['sinkhorn_matches'] = matches
 		attn_matrix = self.xa_decoder.attention_cross[-1]
-		svd_weights = attn_matrix.sum(-1)
+		svd_weights = attn_matrix.sum(1)
+
+		src_coords = coords1.permute(1, 0, 2)
+		tgt_coords = matches.permute(1, 0, 2)
+
 		batch_dict['transport'] = attn_matrix
+		batch_dict['attention_features'] = attn_feats.permute(1, 0, 2)
+		batch_dict['sinkhorn_matches'] = tgt_coords
 
-		transformation1 = compute_rigid_transform(coords1.permute(1, 0, 2), matches.permute(1, 0, 2), svd_weights)
+		try:
+			transformation = compute_rigid_transform(src_coords, tgt_coords, svd_weights)
+		except RuntimeError as e:
+			print("SVD did not converge!!!!!")
+			print(e)
+			print("Debug Info:")
+			print("\n\n\nattn: ", attn_matrix)
+			print("\n\n\nsrc_coords: ", src_coords)
+			print("\n\n\ntgt_coords:   ", tgt_coords)
+			print("\n\n\nsvd_weights:   ", svd_weights)
+			print("\n\n\n")
 
-		batch_dict['transformation'] = transformation1
+			raise SVDNonConvergenceError("SVD did not converge!")
+
+		batch_dict['transformation'] = transformation
 		batch_dict['out_rotation'] = None
 		batch_dict['out_translation'] = None
 
