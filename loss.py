@@ -357,3 +357,45 @@ def inverse_tf_loss(batch_dict):
     loss = torch.mean(loss)
 
     return loss
+
+
+def rottrace_loss(batch_dict, delta_pose):
+    """
+    Rotation Loss, based on the fact that:
+
+    tr(R) = 1 + 2 cos(theta)
+
+    for any given 3D rotation matrix representing a rotation of theta around an arbitrary axis.
+
+    :param batch_dict:
+    :param delta_pose:
+    :param mode:
+    :return:
+    """
+
+
+    predicted_pose = batch_dict['transformation']
+    homogeneous = torch.tensor([0., 0., 0., 1.]).repeat(predicted_pose.shape[0], 1, 1).to(predicted_pose.device)
+    predicted_pose = torch.cat((predicted_pose, homogeneous), dim=1)
+
+    # Invert the ground truth, so that the gradient does not have to propagate back through the inversion process.
+    delta_pose_inv = delta_pose.double().inverse().float()
+
+    err_pose = torch.bmm(delta_pose_inv, predicted_pose)
+
+    # Computing the trace, since torch.trace() doesn't work as it expects a 2D Matrix.
+    rot_err = - err_pose.diagonal(offset=0, dim1=-1, dim2=-2).sum(-1)  # Trace
+    tra_err = torch.norm(err_pose[:, :3, 3:], dim=1)
+
+    mean_rot_err = torch.mean(rot_err)
+    mean_rot_err_deg = (-mean_rot_err - 1) / 2
+    if mean_rot_err_deg <= -1:
+        mean_rot_err_deg = torch.tensor(180, device=mean_rot_err.device)
+    elif mean_rot_err_deg >= 1:
+        mean_rot_err_deg = torch.tensor(0, device=mean_rot_err.device)
+    else:
+        mean_rot_err_deg = torch.arccos(mean_rot_err_deg)
+    mean_rot_err_deg = mean_rot_err_deg * 180 / np.pi
+    mean_tra_err = torch.mean(tra_err)
+
+    return mean_rot_err, mean_rot_err_deg, mean_tra_err

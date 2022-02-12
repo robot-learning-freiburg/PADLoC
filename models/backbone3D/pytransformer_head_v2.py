@@ -3,8 +3,51 @@ import torch.nn.functional as F
 
 from .heads import compute_rigid_transform
 from .xatransformer import XATransformerEncoder, XATransformerEncoderLayer
-from .positional_encoder import PositionalEncodingCart3D
 from utils.tools import SVDNonConvergenceError
+
+
+def shannon_entropy(*, p, dim=-1, **_):
+	"""
+
+	:param p: Tensor of probabilities in [0, 1]
+	:param dim: Dimension along which the probabilities add up to one
+
+	:return:
+	"""
+	return - (p * p.log()).sum(dim=dim)
+
+
+def hill_number(*, p, q, dim=-1, **_):
+	"""
+
+	:param p: Tensor of probabilities in [0, 1]
+	:param q: Order of the diversity index.
+	:param dim: Dimension along which the probabilities add up to one
+
+	:return:
+	"""
+	if q == 1:
+		return shannon_entropy(p=p).exp()
+
+	return (p ** q).sum(dim=dim) ** (1 / (1 - q))
+
+
+def norm_diversity(*, d, n, **_):
+	return (1 / (n - 1)) * (n - d)
+
+
+def norm_hill_number(*, p, q, dim=-1, **_):
+	n = p.shape[dim]
+	d = hill_number(p=p, q=q, dim=dim)
+	return norm_diversity(d=d, n=n)
+
+
+def berger_parker_index(*, p, dim=-1, **_):
+	return p.max(dim=dim)
+
+
+def weight_sum(*, p, dim=-1, **_):
+	return p.sum(dim=dim)
 
 
 class PyTransformerHead2(nn.Module):
@@ -12,30 +55,45 @@ class PyTransformerHead2(nn.Module):
 	TODO
 	"""
 
-	def __init__(self, **kwargs):
+	def __init__(self, *, feature_size,
+				 tf_xa_enc_nheads=1, tf_xa_enc_layers=1, tf_xa_hiddn_size=None,
+				 point_weighting_method="weight_sum", point_weighting_method_order=2,
+				 **_):
 
 		super(PyTransformerHead2, self).__init__()
 
-		feat_size = kwargs['feature_size']
-
 		# Cross Attention Layer Parameters
-		xa_enc_nheads = kwargs.get("tf_xa_enc_nheads") or 1
-		xa_enc_layers = kwargs.get("tf_xa_enc_layers") or 1
+		xa_enc_layers = tf_xa_enc_layers or 1
 		# Default hidden size as done in the original paper "Attention is all you need": 4 times d_model
-		xa_hiddn_size = kwargs.get("tf_xa_hiddn_size") or (feat_size * 4)
+		xa_hiddn_size = (feature_size * 4) if tf_xa_hiddn_size is None else tf_xa_hiddn_size
 
-		sa_enc_layer = XATransformerEncoderLayer(d_model=feat_size, nhead=xa_enc_nheads,
-												 kdim=feat_size, vdim=3,
+		sa_enc_layer = XATransformerEncoderLayer(d_model=feature_size, nhead=tf_xa_enc_nheads,
+												 kdim=feature_size, vdim=3,
 												 dim_feedforward=xa_hiddn_size)
 
-		self.xa_encoder = XATransformerEncoder(sa_enc_layer, num_layers=xa_enc_layers)
-		self.linear = nn.Linear(feat_size, 3)
+		weighting_methods = {
+			"hill": {"f": norm_hill_number, "kwargs": {"dim": -1}},
+			"berger": {"f": berger_parker_index, "kwargs": {"dim": -1}},
+			"weight_sum": {"f": weight_sum, "kwargs": {"dim": 1}}
+		}
 
-	def forward(self, batch_dict, **kwargs):
+		if point_weighting_method not in weighting_methods:
+			raise ValueError(f"Invalid point weighting method ({point_weighting_method}). Valid values: {weighting_methods.keys()}.")
+		weighting_method = weighting_methods[point_weighting_method]
+		weighting_method_kwargs = weighting_method["kwargs"].copy()
+		weighting_method_kwargs["q"] = point_weighting_method_order
+		self._weighting_method = weighting_method["f"]
+		self._weighting_method_kwargs = weighting_method_kwargs
+
+		self.xa_encoder = XATransformerEncoder(sa_enc_layer, num_layers=xa_enc_layers)
+		self.linear = nn.Linear(feature_size, 3)
+
+	def forward(self, batch_dict, *,
+				mode="pairs", **_):
 		"""
 		TODO
 		:param batch_dict:
-		:param kwargs:
+		:param mode:
 		:return:
 		"""
 
@@ -44,7 +102,6 @@ class PyTransformerHead2(nn.Module):
 
 		# Dimensions
 		d_bt, d_f, d_p = features.shape  # Dimensions: Batch*Tuple, Features, Points
-		mode = kwargs.get("mode") or "pairs"
 		d_t = 2 if mode == "pairs" else 3  # Dimension: Tuple size (2 <- pairs / 3 <- triplets)
 		d_b = d_bt // d_t  # Dimension: Batch size
 
@@ -67,10 +124,13 @@ class PyTransformerHead2(nn.Module):
 		tf_out = self.xa_encoder(k=features1, q=features2, v=coords2)
 		attn_matrix = self.xa_encoder.attention[-1]
 
-		# Return the output of the transformer encoder back to coordinate size (3)
+		# Return the output of the transformer encoder back to coordinate size (3) to get the virtual points.
 		matches = self.linear(tf_out)
 
-		svd_weights = attn_matrix.sum(1)
+		# Compute the weight of each virtual point
+		wm_kwargs = self._weighting_method_kwargs.copy()
+		wm_kwargs["p"] = attn_matrix
+		svd_weights = self._weighting_method(**wm_kwargs)
 
 		src_coords = coords1.permute(1, 0, 2)
 		tgt_coords = matches.permute(1, 0, 2)

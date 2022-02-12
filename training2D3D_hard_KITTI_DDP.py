@@ -23,7 +23,7 @@ from datasets.KITTI360Dataset import KITTI3603DDictPairs, KITTI3603DPoses
 from datasets.KITTI_data_loader import KITTILoader3DPoses, KITTILoader3DDictPairs
 from datasets.NCLTDataset import NCLTDatasetPairs, NCLTDataset, NCLTDatasetTriplets
 from loss import smooth_metric_lossv2, NPair_loss, Circle_Loss, TripletLoss, sinkhorn_matches_loss, pose_loss,\
-    panoptic_mismatch_loss, inverse_tf_loss
+    panoptic_mismatch_loss, inverse_tf_loss, rottrace_loss
 from models.backbone3D.RandLANet.RandLANet import prepare_randlanet_input
 from models.backbone3D.RandLANet.helper_tool import ConfigSemanticKITTI2
 from models.get_models import get_model
@@ -298,7 +298,8 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                 loss_transl = torch.tensor([0.], device=device)
 
             if exp_cfg['weight_rot'] > 0.:
-                if exp_cfg['head'] == "SuperGlue" and exp_cfg['sinkhorn_aux_loss']:
+                if exp_cfg['head'] in ["SuperGlue", "Transformer", "PyTransformer", "PyTransformer2"] \
+                        and exp_cfg['sinkhorn_aux_loss']:
                     aux_loss = sinkhorn_matches_loss(batch_dict, delta_pose, mode=mode)
                     if torch.any(torch.isnan(aux_loss)):
                         raise NaNLossError("Sinkhorn Aux Loss has NAN")
@@ -355,7 +356,14 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                     quat_out = to_quat.apply(yaws_out)
                     loss_rot = quaternion_atan_loss(quat_out, delta_quat[:, [3,0,1,2]]).mean()
                 elif exp_cfg['rot_representation'] == '6dof':
-                    loss_rot = pose_loss(batch_dict, delta_pose, mode=mode)
+                    pose_loss_fn = exp_cfg.get("pose_loss_fn") or "proj_point"
+                    if pose_loss_fn == "rotrace":
+                        tra_weight = exp_cfg.get("weight_transl", 1)
+                        loss_rot, loss_rot_deg, loss_transl = rottrace_loss(batch_dict, delta_pose)
+                        other_loss_dict["Loss: Rotation (Degrees) [Not used for BackProp]"] = loss_rot_deg
+                        loss_rot = loss_rot + (tra_weight / exp_cfg['weight_rot']) * loss_transl
+                    else:
+                        loss_rot = pose_loss(batch_dict, delta_pose, mode=mode)
                     if torch.any(torch.isnan(loss_rot)):
                         raise NaNLossError("Rot Loss has NAN")
                     if exp_cfg['head'] == "SuperGlue" and exp_cfg['sinkhorn_type'] == 'slack':
@@ -507,7 +515,7 @@ def test(model, sample, exp_cfg, device):
             yaw = batch_dict['out_rotation']
             # transl_diff = anchor_transl - positive_transl
             transl_diff = delta_transl
-            if exp_cfg['weight_transl'] > 0.:
+            if exp_cfg['weight_transl'] > 0. and transl is not None:
                 gt_pred_diff = transl_diff - transl
                 transl_comps_error = gt_pred_diff.norm(dim=1).mean()
             else:
