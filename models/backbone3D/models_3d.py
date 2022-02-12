@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from models.backbone3D.heads import PointNetHead, CorrelationHead, UOTHead
 from models.backbone3D.transformer_head import TransformerHead
 from models.backbone3D.pytransformer_head import PyTransformerHead
+from models.backbone3D.pytransformer_head_v2 import PyTransformerHead2
 
 
 #import models.Backbone3D.Pointnet2_PyTorch.models.pointnet2_msg_sem as PN2
@@ -79,6 +80,9 @@ class LCDNet(nn.Module):
         elif self.head == 'PyTransformer':
             self.pose_head = PyTransformerHead(**kwargs)
 
+        elif self.head == 'PyTransformer2':
+            self.pose_head = PyTransformerHead2(**kwargs)
+
     def forward(self, batch_dict, metric_head=True, compute_embeddings=True, compute_transl=True,
                 compute_rotation=True, compute_backbone=True, mode='pairs'):
         # time1 = time.time()
@@ -132,7 +136,7 @@ class LCDNet(nn.Module):
                 batch_dict = self.pose_head(batch_dict, compute_transl, compute_rotation, mode=mode)
 
             #* TransformerHead
-            elif self.head == 'Transformer' or self.head == 'PyTransformer':
+            elif self.head in ['Transformer', 'PyTransformer', 'PyTransformer2']:
                 batch_dict = self.pose_head(batch_dict, mode=mode)
 
             # time2 = time.time()

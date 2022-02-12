@@ -31,7 +31,7 @@ def _get_activation_fn(activation):
 	raise RuntimeError("activation should be relu/gelu, not {}".format(activation))
 
 
-class XATransformerEncoder(nn.Module):
+class SATransformerEncoder(nn.Module):
 	r"""TransformerEncoder is a stack of N encoder layers
 	TODO
 	Args:
@@ -48,7 +48,7 @@ class XATransformerEncoder(nn.Module):
 	__constants__ = ['norm']
 
 	def __init__(self, encoder_layer, num_layers, norm=None):
-		super(XATransformerEncoder, self).__init__()
+		super(SATransformerEncoder, self).__init__()
 		self.layers = _get_clones(encoder_layer, num_layers)
 		self.num_layers = num_layers
 		self.norm = norm
@@ -79,7 +79,7 @@ class XATransformerEncoder(nn.Module):
 		return output
 
 
-class XATransformerEncoderLayer(nn.Module):
+class SATransformerEncoderLayer(nn.Module):
 	r"""TransformerEncoderLayer is made up of self-attn and feedforward network.
 	This standard encoder layer is based on the paper "Attention Is All You Need".
 	Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez,
@@ -101,7 +101,7 @@ class XATransformerEncoderLayer(nn.Module):
 	"""
 
 	def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, activation="relu"):
-		super(XATransformerEncoderLayer, self).__init__()
+		super(SATransformerEncoderLayer, self).__init__()
 		self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
 		# Implementation of Feedforward model
 		self.linear1 = nn.Linear(d_model, dim_feedforward)
@@ -135,6 +135,122 @@ class XATransformerEncoderLayer(nn.Module):
 		src2, attn = self.self_attn(src, src, src, attn_mask=src_mask,
 							  key_padding_mask=src_key_padding_mask)
 		src = src + self.dropout1(src2)
+		src = self.norm1(src)
+		src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
+		src = src + self.dropout2(src2)
+		src = self.norm2(src)
+		return src, attn
+
+
+class XATransformerEncoder(nn.Module):
+	r"""TransformerEncoder is a stack of N encoder layers
+	TODO
+	Args:
+		encoder_layer: an instance of the TransformerEncoderLayer() class (required).
+		num_layers: the number of sub-encoder-layers in the encoder (required).
+		norm: the layer normalization component (optional).
+
+	Examples::
+		>>> encoder_layer = nn.TransformerEncoderLayer(d_model=512, nhead=8)
+		>>> transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
+		>>> src = torch.rand(10, 32, 512)
+		>>> out = transformer_encoder(src)
+	"""
+	__constants__ = ['norm']
+
+	def __init__(self, encoder_layer, num_layers, norm=None):
+		super(XATransformerEncoder, self).__init__()
+		self.layers = _get_clones(encoder_layer, num_layers)
+		self.num_layers = num_layers
+		self.norm = norm
+		self.attention = []
+
+	def forward(self, k: Tensor, q: Tensor, v: Tensor,
+				mask: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None
+				) -> Tensor:
+		r"""Pass the input through the encoder layers in turn.
+
+		Args:
+			src: the sequence to the encoder (required).
+			mask: the mask for the src sequence (optional).
+			src_key_padding_mask: the mask for the src keys per batch (optional).
+
+		Shape:
+			see the docs in Transformer class.
+		"""
+		output = q
+
+		self.attention = []
+
+		for mod in self.layers:
+			output, attn = mod(k, output, v, src_mask=mask, src_key_padding_mask=src_key_padding_mask)
+			self.attention.append(attn)
+
+		if self.norm is not None:
+			output = self.norm(output)
+
+		return output
+
+
+class XATransformerEncoderLayer(nn.Module):
+	r"""TransformerEncoderLayer is made up of self-attn and feedforward network.
+	This standard encoder layer is based on the paper "Attention Is All You Need".
+	Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez,
+	Lukasz Kaiser, and Illia Polosukhin. 2017. Attention is all you need. In Advances in
+	Neural Information Processing Systems, pages 6000-6010. Users may modify or implement
+	in a different way during application.
+	TODO
+	Args:
+		d_model: the number of expected features in the input (required).
+		nhead: the number of heads in the multiheadattention models (required).
+		dim_feedforward: the dimension of the feedforward network model (default=2048).
+		dropout: the dropout value (default=0.1).
+		activation: the activation function of intermediate layer, relu or gelu (default=relu).
+
+	Examples::
+		>>> encoder_layer = nn.TransformerEncoderLayer(d_model=512, nhead=8)
+		>>> src = torch.rand(10, 32, 512)
+		>>> out = encoder_layer(src)
+	"""
+
+	def __init__(self, d_model, nhead, kdim=None, vdim=None, dim_feedforward=2048, dropout=0.1, activation="relu"):
+		super(XATransformerEncoderLayer, self).__init__()
+		self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, kdim=kdim, vdim=vdim)
+		# Implementation of Feedforward model
+		self.linear1 = nn.Linear(d_model, dim_feedforward)
+		self.dropout = nn.Dropout(dropout)
+		self.linear2 = nn.Linear(dim_feedforward, d_model)
+
+		self.norm1 = nn.LayerNorm(d_model)
+		self.norm2 = nn.LayerNorm(d_model)
+		self.dropout1 = nn.Dropout(dropout)
+		self.dropout2 = nn.Dropout(dropout)
+
+		self.activation = _get_activation_fn(activation)
+
+	def __setstate__(self, state):
+		if 'activation' not in state:
+			state['activation'] = F.relu
+		super(XATransformerEncoderLayer, self).__setstate__(state)
+
+	def forward(self, k: Tensor, q: Tensor, v: Tensor, src_mask: Optional[Tensor] = None,
+				src_key_padding_mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
+		r"""Pass the input through the encoder layer.
+		TODO
+		Args:
+			k: the source key sequence to the decoder layer (required).
+			q: the source query sequence to the decoder (required).
+			v: the source value sequence to the decoder (required).
+			src_mask: the mask for the src sequence (optional).
+			src_key_padding_mask: the mask for the src keys per batch (optional).
+
+		Shape:
+			see the docs in Transformer class.
+		"""
+		src2, attn = self.self_attn(k, q, v, attn_mask=src_mask,
+									key_padding_mask=src_key_padding_mask)
+		# TODO: Is adding Q as residual/skip the way to go??? At least that's how it works in the standard decoder's XA
+		src = q + self.dropout1(src2)
 		src = self.norm1(src)
 		src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
 		src = src + self.dropout2(src2)

@@ -2,8 +2,8 @@ from torch import nn
 import torch.nn.functional as F
 
 from .heads import compute_rigid_transform
-from .xatransformer import XATransformerEncoder, XATransformerDecoder,\
-	XATransformerEncoderLayer, XATransformerDecoderLayer
+from .xatransformer import SATransformerEncoder, XATransformerDecoder,\
+	SATransformerEncoderLayer, XATransformerDecoderLayer
 from .positional_encoder import PositionalEncodingCart3D
 from utils.tools import SVDNonConvergenceError
 
@@ -41,14 +41,14 @@ class PyTransformerHead(nn.Module):
 		if self._pe_weight:
 			self._positional_encoding = PositionalEncodingCart3D(feat_size, **kwargs)
 
-		sa_enc_layer = XATransformerEncoderLayer(d_model=feat_size, nhead=sa_enc_nheads,
+		sa_enc_layer = SATransformerEncoderLayer(d_model=feat_size, nhead=sa_enc_nheads,
 												  dim_feedforward=sa_hiddn_size)
 		xa_dec_layer = XATransformerDecoderLayer(sa_d_model=3, mha_d_model=feat_size,
 												 sa_nhead=xa_dec_sa_nheads, mha_nhead=xa_dec_mha_nheads,
 												 dim_feedforward=xa_hiddn_size,
 												 mha_kdim=feat_size, mha_vdim=3)
 
-		self.sa_encoder = XATransformerEncoder(sa_enc_layer, num_layers=sa_enc_layers)
+		self.sa_encoder = SATransformerEncoder(sa_enc_layer, num_layers=sa_enc_layers)
 		self.xa_decoder = XATransformerDecoder(xa_dec_layer, num_layers=xa_dec_layers)
 
 	def forward(self, batch_dict, **kwargs):
