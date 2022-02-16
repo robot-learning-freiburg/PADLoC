@@ -7,6 +7,7 @@ from models.backbone3D.heads import PointNetHead, CorrelationHead, UOTHead
 from models.backbone3D.transformer_head import TransformerHead
 from models.backbone3D.pytransformer_head import PyTransformerHead
 from models.backbone3D.pytransformer_head_v2 import PyTransformerHead2
+from models.backbone3D.pytransformer_feature_multilayer_head_v2 import PyTransformerFeatureMultiLayerHead
 
 
 #import models.Backbone3D.Pointnet2_PyTorch.models.pointnet2_msg_sem as PN2
@@ -63,6 +64,13 @@ class LCDNet(nn.Module):
         points_num = kwargs.get("num_points") or 4096
         rotation_parameters = kwargs.get("rotation_parameters") or 2
 
+        self._transformer_head_dict = {
+            "Transformer": TransformerHead,
+            "PyTransformer": PyTransformerHead,
+            "PyTransformer2": PyTransformerHead2,
+            "MLFeatTF": PyTransformerFeatureMultiLayerHead
+        }
+
         #* PointNetHead
         if self.head == 'PointNet':
             self.pose_head = PointNetHead(fc_input_dim, points_num, rotation_parameters)
@@ -74,14 +82,12 @@ class LCDNet(nn.Module):
         elif self.head == 'SuperGlue':
             self.pose_head = UOTHead(fc_input_dim, points_num, **kwargs)
 
-        elif self.head == 'Transformer':
-            self.pose_head = TransformerHead(**kwargs)
+        else:
 
-        elif self.head == 'PyTransformer':
-            self.pose_head = PyTransformerHead(**kwargs)
+            if self.head not in self._transformer_head_dict:
+                raise ValueError(f"Invalid head ({self.head}). Valid values: {self._transformer_head_dict.keys()}.")
 
-        elif self.head == 'PyTransformer2':
-            self.pose_head = PyTransformerHead2(**kwargs)
+            self.pose_head = self._transformer_head_dict[self.head](**kwargs)
 
     def forward(self, batch_dict, metric_head=True, compute_embeddings=True, compute_transl=True,
                 compute_rotation=True, compute_backbone=True, mode='pairs'):
@@ -136,7 +142,7 @@ class LCDNet(nn.Module):
                 batch_dict = self.pose_head(batch_dict, compute_transl, compute_rotation, mode=mode)
 
             #* TransformerHead
-            elif self.head in ['Transformer', 'PyTransformer', 'PyTransformer2']:
+            elif self.head in self._transformer_head_dict:
                 batch_dict = self.pose_head(batch_dict, mode=mode)
 
             # time2 = time.time()
