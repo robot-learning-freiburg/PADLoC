@@ -384,18 +384,30 @@ def rottrace_loss(batch_dict, delta_pose):
     err_pose = torch.bmm(delta_pose_inv, predicted_pose)
 
     # Computing the trace, since torch.trace() doesn't work as it expects a 2D Matrix.
-    rot_err = - err_pose.diagonal(offset=0, dim1=-1, dim2=-2).sum(-1)  # Trace
+    rot_err = err_pose.diagonal(offset=0, dim1=-1, dim2=-2).sum(-1)
+    rot_err = (1 - rot_err) / 2  # rot_err = - cos(theta)
     tra_err = torch.norm(err_pose[:, :3, 3:], dim=1)
 
     mean_rot_err = torch.mean(rot_err)
-    mean_rot_err_deg = (-mean_rot_err - 1) / 2
-    if mean_rot_err_deg <= -1:
-        mean_rot_err_deg = torch.tensor(180, device=mean_rot_err.device)
-    elif mean_rot_err_deg >= 1:
-        mean_rot_err_deg = torch.tensor(0, device=mean_rot_err.device)
-    else:
-        mean_rot_err_deg = torch.arccos(mean_rot_err_deg)
-    mean_rot_err_deg = mean_rot_err_deg * 180 / np.pi
     mean_tra_err = torch.mean(tra_err)
+
+    # mean_rot_err_deg = torch.zeros_like(rot_err)
+    # mean_rot_err_deg[rot_err <= -1.] = torch.tensor(0., device=mean_rot_err.device)
+    # mean_rot_err_deg[rot_err >= 1.] = torch.tensor(np.pi, device=mean_rot_err.device)
+    # valid_idx = torch.logical_and(rot_err > -1., rot_err < 1.)
+    mean_rot_err_deg = - torch.clip(rot_err, -1., 1.)
+    mean_rot_err_deg = torch.arccos(mean_rot_err_deg)
+
+    # Circular mean of the error angles
+    mean_rot_err_deg_c = torch.mean(torch.cos(mean_rot_err_deg))
+    mean_rot_err_deg_s = torch.mean(torch.sin(mean_rot_err_deg))
+    mean_rot_err_deg = torch.atan2(mean_rot_err_deg_s, mean_rot_err_deg_c)
+
+    # Normalize angle between -pi and pi
+    # Not needed, since all outputs of acos are between -pi and pi ???
+
+    # Convert to degrees
+    mean_rot_err_deg = torch.abs(mean_rot_err_deg)
+    mean_rot_err_deg = mean_rot_err_deg * 180 / np.pi
 
     return mean_rot_err, mean_rot_err_deg, mean_tra_err
