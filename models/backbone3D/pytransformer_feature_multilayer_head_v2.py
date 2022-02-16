@@ -117,7 +117,9 @@ class PyTransformerFeatureMultiLayerHead(nn.Module):
 			for a in self.xa_feature_encoder.attention:
 				attn_matrix = attn_matrix + a
 		elif self.attn_matrix_method == "product":
-			attn_matrix = torch.eye(last_attn_matrix.shape, device=last_attn_matrix.device)
+			attn_matrix = torch.eye(d_p, device=last_attn_matrix.device)
+			attn_matrix = attn_matrix.reshape((1, d_p, d_p))
+			attn_matrix = attn_matrix.repeat(d_b, 1, 1)
 			for a in self.xa_feature_encoder.attention:
 				attn_matrix = torch.bmm(attn_matrix, a)
 			attn_matrix = torch.bmm(attn_matrix, last_attn_matrix)
