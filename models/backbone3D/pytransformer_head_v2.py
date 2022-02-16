@@ -43,7 +43,7 @@ def norm_hill_number(*, p, q, dim=-1, **_):
 
 
 def berger_parker_index(*, p, dim=-1, **_):
-	return p.max(dim=dim)
+	return p.max(dim=dim).values
 
 
 def weight_sum(*, p, dim=-1, **_):
