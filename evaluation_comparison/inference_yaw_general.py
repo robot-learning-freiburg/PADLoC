@@ -183,7 +183,8 @@ def main_process(gpu, weights_path, args):
 
     if args.dataset == 'kitti':
         dataset_for_recall = KITTILoader3DPoses(args.data, sequences_validation[0],
-                                                os.path.join(args.data, 'sequences', sequences_validation[0],'poses_SEMANTICKITTI.txt'),
+                                                os.path.join(args.data, 'sequences',
+                                                             sequences_validation[0], 'poses.txt'),
                                                 exp_cfg['num_points'], device, train=False,
                                                 without_ground=exp_cfg['without_ground'], loop_file=exp_cfg['loop_file'])
     else:
@@ -458,25 +459,37 @@ def main_process(gpu, weights_path, args):
     print("Mean translation error: ", transl_errors.mean())
     print("Median translation error: ", np.median(transl_errors))
     print("STD translation error: ", transl_errors.std())
-    save_dict = {'rot': yaw_error, 'transl': transl_errors}
-    save_path = f'./results_for_paper/lcdnet00+08_{exp_cfg["test_sequence"]}'
-    # if '360' in weights_path:
-    #     save_path = f'./results_for_paper/lcdnet++_{exp_cfg["test_sequence"]}'
-    # else:
-    #     save_path = f'./results_for_paper/lcdnet_{exp_cfg["test_sequence"]}'
-    if args.icp:
-        save_path = save_path+'_icp'
-    elif args.ransac:
-        save_path = save_path+'_ransac'
-    # print("Saving to ", save_path)
-    # with open(f'{save_path}.pickle', 'wb') as f:
-    #     pickle.dump(save_dict, f)
+
     valid = yaw_error <= 5.
     valid = valid & (np.array(transl_errors) <= 2.)
     succ_rate = valid.sum() / valid.shape[0]
     rte_suc = transl_errors[valid].mean()
     rre_suc = yaw_error[valid].mean()
+
     print(f"Success Rate: {succ_rate}, RTE: {rte_suc}, RRE: {rre_suc}")
+
+    if args.save:
+        save_dict = {
+            'rot': yaw_error,
+            'transl': transl_errors,
+            "success_rate": succ_rate,
+            "RTE": rte_suc,
+            "RRE": rre_suc
+        }
+
+        save_path = f'./evaluation_results/lcdnet00+08_{exp_cfg["test_sequence"]}'
+        # if '360' in weights_path:
+        #     save_path = f'./results_for_paper/lcdnet++_{exp_cfg["test_sequence"]}'
+        # else:
+        #     save_path = f'./results_for_paper/lcdnet_{exp_cfg["test_sequence"]}'
+        if args.icp:
+            save_path = save_path+'_icp'
+        elif args.ransac:
+            save_path = save_path+'_ransac'
+
+        print("Saving to ", save_path)
+        with open(f'{save_path}.pickle', 'wb') as f:
+            pickle.dump(save_dict, f)
 
 
 if __name__ == '__main__':
@@ -488,6 +501,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='kitti')
     parser.add_argument('--ransac', action='store_true', default=False)
     parser.add_argument('--icp', action='store_true', default=False)
+    parser.add_argument('--save', action='store_true', default=False)
     args = parser.parse_args()
 
     # if args.device is not None and not args.no_cuda:
