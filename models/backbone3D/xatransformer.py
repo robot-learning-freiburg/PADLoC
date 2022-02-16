@@ -165,7 +165,7 @@ class XATransformerEncoder(nn.Module):
 		self.norm = norm
 		self.attention = []
 
-	def forward(self, k: Tensor, q: Tensor, v: Tensor,
+	def forward(self, *, k: Tensor, q: Tensor, v: Tensor,
 				mask: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None
 				) -> Tensor:
 		r"""Pass the input through the encoder layers in turn.
@@ -183,7 +183,7 @@ class XATransformerEncoder(nn.Module):
 		self.attention = []
 
 		for mod in self.layers:
-			output, attn = mod(k, output, v, src_mask=mask, src_key_padding_mask=src_key_padding_mask)
+			output, attn = mod(q=output, k=k, v=v, src_mask=mask, src_key_padding_mask=src_key_padding_mask)
 			self.attention.append(attn)
 
 		if self.norm is not None:
@@ -233,7 +233,7 @@ class XATransformerEncoderLayer(nn.Module):
 			state['activation'] = F.relu
 		super(XATransformerEncoderLayer, self).__setstate__(state)
 
-	def forward(self, k: Tensor, q: Tensor, v: Tensor, src_mask: Optional[Tensor] = None,
+	def forward(self, *, q: Tensor, k: Tensor, v: Tensor, src_mask: Optional[Tensor] = None,
 				src_key_padding_mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
 		r"""Pass the input through the encoder layer.
 		TODO
@@ -247,7 +247,7 @@ class XATransformerEncoderLayer(nn.Module):
 		Shape:
 			see the docs in Transformer class.
 		"""
-		src2, attn = self.self_attn(k, q, v, attn_mask=src_mask,
+		src2, attn = self.self_attn(query=q, key=k, value=v, attn_mask=src_mask,
 									key_padding_mask=src_key_padding_mask)
 		# TODO: Is adding Q as residual/skip the way to go??? At least that's how it works in the standard decoder's XA
 		src = q + self.dropout1(src2)

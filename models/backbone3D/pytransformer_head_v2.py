@@ -1,3 +1,4 @@
+import torch
 from torch import nn
 import torch.nn.functional as F
 
@@ -42,8 +43,17 @@ def norm_hill_number(*, p, q, dim=-1, **_):
 	return norm_diversity(d=d, n=n)
 
 
-def berger_parker_index(*, p, dim=-1, **_):
-	return p.max(dim=dim).values
+def berger_parker_index(*, p, dim=-1, normalize=True, **_):
+	w = p.max(dim=dim).values
+
+	if normalize:
+		# Normalize to [0, 1] such that
+		# if max(p) = 1 (Ultra-sharp distribution) -> w = 1,
+		# if max(p) = 1/n (Ultra-flat distribution) -> w = 0
+		n = p.shape[dim]
+		w = (n / (n - 1)) * (w - (1 / n))
+
+	return w
 
 
 def weight_sum(*, p, dim=-1, **_):
@@ -58,6 +68,7 @@ class PyTransformerHead2(nn.Module):
 	def __init__(self, *, feature_size,
 				 tf_xa_enc_nheads=1, tf_xa_enc_layers=1, tf_xa_hiddn_size=None,
 				 point_weighting_method="weight_sum", point_weighting_method_order=2,
+				 inv_tf_weight=0,
 				 **_):
 
 		super(PyTransformerHead2, self).__init__()
@@ -84,6 +95,8 @@ class PyTransformerHead2(nn.Module):
 		weighting_method_kwargs["q"] = point_weighting_method_order
 		self._weighting_method = weighting_method["f"]
 		self._weighting_method_kwargs = weighting_method_kwargs
+
+		self._inv_tf_weight = inv_tf_weight
 
 		self.xa_encoder = XATransformerEncoder(sa_enc_layer, num_layers=xa_enc_layers)
 		self.linear = nn.Linear(feature_size, 3)
@@ -121,7 +134,15 @@ class PyTransformerHead2(nn.Module):
 		coords1 = coords[:, :d_b, :]  # Coordinates of PC1
 		coords2 = coords[:, d_b:2*d_b, :]  # Coordinates of PC2
 
-		tf_out = self.xa_encoder(k=features1, q=features2, v=coords2)
+		in_features1, in_features2 = features1, features2
+		in_coords1, in_coords2 = coords1, coords2
+		if self._inv_tf_weight:
+			in_features1 = torch.cat([features1, features2])
+			in_features2 = torch.cat([features2, features1])
+			in_coords1 = torch.cat([coords1, coords2])
+			in_coords2 = torch.cat([coords2, coords1])
+
+		tf_out = self.xa_encoder(q=in_features1, k=in_features2, v=in_coords2)
 		attn_matrix = self.xa_encoder.attention[-1]
 
 		# Return the output of the transformer encoder back to coordinate size (3) to get the virtual points.
@@ -132,7 +153,7 @@ class PyTransformerHead2(nn.Module):
 		wm_kwargs["p"] = attn_matrix
 		svd_weights = self._weighting_method(**wm_kwargs)
 
-		src_coords = coords1.permute(1, 0, 2)
+		src_coords = in_coords1.permute(1, 0, 2)
 		tgt_coords = matches.permute(1, 0, 2)
 
 		batch_dict['transport'] = attn_matrix
