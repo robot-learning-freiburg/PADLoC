@@ -105,7 +105,17 @@ class PyTransformerFeatureMultiLayerHead(nn.Module):
 			in_coords2 = torch.cat([coords2, coords1])
 
 		xa_features1 = self.xa_feature_encoder(q=in_features1, k=in_features2, v=in_features2)
-		xa_hd_points = self.xa_point_encoder(q=xa_features1, k=in_features2, v=in_coords2)
+
+		xaf1_attn = None
+		for a in reversed(self.xa_feature_encoder.attention):
+			if xaf1_attn is None:
+				xaf1_attn = a
+			else:
+				xaf1_attn = torch.bmm(a, xaf1_attn)
+
+		in_coords2_hat = torch.bmm(xaf1_attn, in_coords2.permute(1, 0, 2)).permute(1, 0, 2)
+
+		xa_hd_points = self.xa_point_encoder(q=xa_features1, k=in_features2, v=in_coords2_hat)
 
 		# Return the output of the transformer encoder back to coordinate size (3) to get the virtual points.
 		matches = self.linear(xa_hd_points)
@@ -117,12 +127,7 @@ class PyTransformerFeatureMultiLayerHead(nn.Module):
 			for a in self.xa_feature_encoder.attention:
 				attn_matrix = attn_matrix + a
 		elif self.attn_matrix_method == "product":
-			attn_matrix = torch.eye(d_p, device=last_attn_matrix.device)
-			attn_matrix = attn_matrix.reshape((1, d_p, d_p))
-			attn_matrix = attn_matrix.repeat(d_b, 1, 1)
-			for a in self.xa_feature_encoder.attention:
-				attn_matrix = torch.bmm(attn_matrix, a)
-			attn_matrix = torch.bmm(attn_matrix, last_attn_matrix)
+			attn_matrix = torch.bmm(last_attn_matrix, xaf1_attn)
 		elif self.attn_matrix_method == "hadamard":
 			attn_matrix = last_attn_matrix
 			for a in self.xa_feature_encoder.attention:
@@ -132,7 +137,7 @@ class PyTransformerFeatureMultiLayerHead(nn.Module):
 
 		# Re-normalize the attention matrix after summing or multiplying,
 		# since the weights are no longer going to add up to one
-		if self.attn_matrix_method in ["sum", "product", "hadamard"]:
+		if self.attn_matrix_method in ["sum", "hadamard"]:
 			attn_matrix = torch.softmax(attn_matrix, dim=-1)
 
 		# Compute the weight of each virtual point
