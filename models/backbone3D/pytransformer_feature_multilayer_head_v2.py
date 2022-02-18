@@ -107,7 +107,12 @@ class PyTransformerFeatureMultiLayerHead(nn.Module):
 		xa_features1 = self.xa_feature_encoder(q=in_features1, k=in_features2, v=in_features2)
 
 		xaf1_attn = None
-		for a in reversed(self.xa_feature_encoder.attention):
+		for a in self.xa_feature_encoder.attention:
+			# Compute the attention matrix as
+			# 		A = A_l * A_l-1 * ... * A_2 * A_1 * A_0
+			# So that the point coordinates passed to the second, single-layer encoder are:
+			# 		^P_2 = A * P_2
+			#            = A_l * ( A_l-1 * ( ... * A_2 * ( A_1 * ( A_0 * P_2 ) ) ... ) )
 			if xaf1_attn is None:
 				xaf1_attn = a
 			else:
