@@ -26,6 +26,8 @@ class DeepClosestPointHead(nn.Module):
 				 tf_coord_enc_hiddn_size=None,
 				 point_weighting_method="weight_sum", point_weighting_method_order=2,
 				 inv_tf_weight=0,
+				 phi_weight=0.1,
+				 dropout=0.1,
 				 **_):
 
 		super(DeepClosestPointHead, self).__init__()
@@ -40,6 +42,9 @@ class DeepClosestPointHead(nn.Module):
 		self.phi_tf = Transformer(d_model=feature_size, nhead=tf_nheads,
 							   num_encoder_layers=tf_enc_layers, num_decoder_layers=tf_dec_layers,
 							   dim_feedforward=tf_hiddn_size)
+		self.phi_weight = phi_weight
+
+		self.dropout1 = nn.Dropout(dropout)
 
 		# Coordinate Transformer Encoder (Pointer) Parameters
 		tf_coord_enc_nheads = tf_coord_enc_nheads or 1
@@ -100,11 +105,13 @@ class DeepClosestPointHead(nn.Module):
 		coords1 = coords[:, :d_b, :]  # Coordinates of PC1
 		coords2 = coords[:, d_b:2*d_b, :]  # Coordinates of PC2
 
-		src = torch.cat([features1, features2], dim=1)
 		tgt = torch.cat([features2, features1], dim=1)
 
-		phi = self.phi_tf.forward(src=src, tgt=tgt)
-		phi = src + phi
+		phi = self.phi_tf(src=features_norm, tgt=tgt)
+		phi = F.normalize(phi, dim=2)
+		phi = self.phi_weight * phi
+
+		phi = features_norm + self.dropout1(phi)
 
 		phi_1 = phi[:, :d_b, :]
 		phi_2 = phi[:, d_b:2*d_b, :]
@@ -138,6 +145,7 @@ class DeepClosestPointHead(nn.Module):
 			print("\n\n\nsvd_weights:   ", svd_weights)
 			print("\n\n\n")
 
+			del batch_dict
 			raise SVDNonConvergenceError("SVD did not converge!")
 
 		batch_dict['transformation'] = transformation

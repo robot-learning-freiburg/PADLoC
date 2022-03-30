@@ -302,6 +302,8 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                         and exp_cfg['sinkhorn_aux_loss']:
                     aux_loss = sinkhorn_matches_loss(batch_dict, delta_pose, mode=mode)
                     if torch.any(torch.isnan(aux_loss)):
+                        del sample
+                        del batch_dict
                         raise NaNLossError("Sinkhorn Aux Loss has NAN")
                     other_loss_dict["Loss: Sinkhorn Aux"] = aux_loss
                 else:
@@ -365,11 +367,15 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                     else:
                         loss_rot = pose_loss(batch_dict, delta_pose, mode=mode)
                     if torch.any(torch.isnan(loss_rot)):
+                        del sample
+                        del batch_dict
                         raise NaNLossError("Rot Loss has NAN")
                     if exp_cfg['head'] == "SuperGlue" and exp_cfg['sinkhorn_type'] == 'slack':
                         inlier_loss = (1 - batch_dict['transport'].sum(dim=1)).mean()
                         inlier_loss += (1 - batch_dict['transport'].sum(dim=2)).mean()
                         if torch.any(torch.isnan(inlier_loss)):
+                            del sample
+                            del batch_dict
                             raise NaNLossError("Sinkhorn Inlier Loss has NAN")
                         other_loss_dict["Loss: Inlier"] = inlier_loss
                         loss_rot += 0.01 * inlier_loss
@@ -382,6 +388,8 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
             if exp_cfg['panoptic_weight'] > 0:
                 loss_panoptic = panoptic_mismatch_loss(batch_dict)
                 if torch.any(torch.isnan(loss_panoptic)):
+                    del sample
+                    del batch_dict
                     raise NaNLossError("Panoptic Mismatch Loss has NaN.")
                 other_loss_dict["Loss: Panoptic Mismatch"] = loss_panoptic
                 total_loss = total_loss + exp_cfg['panoptic_weight'] * loss_panoptic
@@ -389,6 +397,8 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
             if exp_cfg['inv_tf_weight'] > 0 and exp_cfg['head'] == "Transformer":
                 loss_inv_tf = inverse_tf_loss(batch_dict)
                 if torch.any(torch.isnan(loss_inv_tf)):
+                    del sample
+                    del batch_dict
                     raise NaNLossError("Inverse Transform Loss has NaN.")
                 other_loss_dict["Loss: Inverse Transform"] = loss_inv_tf
                 total_loss = total_loss + exp_cfg['inv_tf_weight'] * loss_inv_tf
@@ -410,6 +420,8 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
 
                 loss_metric_learning = loss_fn(model_out, pos_mask, neg_mask) * exp_cfg['weight_metric_learning']
                 if torch.any(torch.isnan(loss_metric_learning)):
+                    del sample
+                    del batch_dict
                     raise NaNLossError("Loss Metric Learning has NAN")
                 other_loss_dict['Loss: Metric Learning'] = loss_metric_learning
                 total_loss = total_loss + loss_metric_learning
@@ -420,6 +432,8 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
             raise NotImplementedError("Not Implemented")
 
         if torch.any(torch.isnan(total_loss)):
+            del sample
+            del batch_dict
             raise NaNLossError("Total Loss has NAN")
 
         if 'TZMGrad' not in exp_cfg['loss_type']:
