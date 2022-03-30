@@ -7,6 +7,7 @@ from models.backbone3D.heads import PointNetHead, CorrelationHead, UOTHead
 from models.backbone3D.transformer_head import TransformerHead
 from models.backbone3D.pytransformer_head import PyTransformerHead
 from models.backbone3D.pytransformer_head_v2 import PyTransformerHead2
+from models.backbone3D.deepclosestpoint_head import DeepClosestPointHead
 from models.backbone3D.pytransformer_feature_multilayer_head_v2 import PyTransformerFeatureMultiLayerHead
 
 
@@ -68,7 +69,8 @@ class LCDNet(nn.Module):
             "Transformer": TransformerHead,
             "PyTransformer": PyTransformerHead,
             "PyTransformer2": PyTransformerHead2,
-            "MLFeatTF": PyTransformerFeatureMultiLayerHead
+            "MLFeatTF": PyTransformerFeatureMultiLayerHead,
+            "DeepClosestPoint": DeepClosestPointHead,
         }
 
         #* PointNetHead
