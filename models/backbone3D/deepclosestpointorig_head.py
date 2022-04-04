@@ -2,7 +2,7 @@
 from argparse import Namespace
 import torch
 import torch.nn as nn
-import torch.functional as F
+import torch.nn.functional as F
 from .deep_closest_point import Transformer, SVDHead
 
 
@@ -15,7 +15,7 @@ class DeepClosestPointHead(nn.Module):
 	"""
 
 	def __init__(self, *, feature_size,
-				 tf_enc_layers=2,
+				 tf_enc_layers=1,
 				 tf_nheads=4,
 				 tf_hiddn_size=1024,
 				 dropout=0.0,
@@ -27,7 +27,7 @@ class DeepClosestPointHead(nn.Module):
 
 		args = {
 			"emb_dims": feature_size,
-			"N": tf_enc_layers,
+			"n_blocks": tf_enc_layers,
 			"dropout": dropout,
 			"ff_dims": tf_hiddn_size,
 			"n_heads": tf_nheads,
@@ -59,17 +59,18 @@ class DeepClosestPointHead(nn.Module):
 
 		coords = coords.view(d_bt, d_p, 4)[:, :, 1:]
 
-		features = features.permute(2, 0, 1)
-		coords = coords.permute(1, 0, 2)
+		# features = features.permute(0, 2, 1)
+		# coords = coords.permute(1, 0, 2)
+		coords = coords.permute(0, 2, 1)
 
 		# Normalize Features for some reason. Probably not required, since the KQV weights will mess them up anyways
-		features_norm = F.normalize(features, dim=2)
+		# features_norm = F.normalize(features, dim=1)
 
 		# Split into anchor and positive features/coordinates
-		features1 = features_norm[:, :d_b, :]
-		features2 = features_norm[:, d_b:2*d_b, :]
-		coords1 = coords[:, :d_b, :]  # Coordinates of PC1
-		coords2 = coords[:, d_b:2*d_b, :]  # Coordinates of PC2
+		features1 = features[:d_b, :, :]
+		features2 = features[d_b:2*d_b, :, :]
+		coords1 = coords[:d_b, :, :]  # Coordinates of PC1
+		coords2 = coords[d_b:2*d_b, :, :]  # Coordinates of PC2
 
 
 		src_embedding_p, tgt_embedding_p = self.pointer(features1, features2)
