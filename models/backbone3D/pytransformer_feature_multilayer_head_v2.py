@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from .heads import compute_rigid_transform
 from .xatransformer import XATransformerEncoder, XATransformerEncoderLayer
-from .pytransformer_head_v2 import norm_hill_number, berger_parker_index, weight_sum
+from .match_weighter import norm_hill_number, berger_parker_index, weight_sum
 from utils.tools import SVDNonConvergenceError
 
 
@@ -20,7 +20,7 @@ class PyTransformerFeatureMultiLayerHead(nn.Module):
 				 inv_tf_weight=0,
 				 **_):
 
-		super(PyTransformerFeatureMultiLayerHead, self).__init__()
+		super().__init__()
 
 		# Cross Attention Layer Parameters
 		xa_enc_layers = tf_xa_enc_layers or 1

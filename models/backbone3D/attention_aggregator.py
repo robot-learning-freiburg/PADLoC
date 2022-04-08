@@ -1,5 +1,3 @@
-import torch.nn as nn
-
 
 def _agg_sum(attn_matrices):
 	if len(attn_matrices) == 1:
@@ -39,7 +37,7 @@ def _agg_last(attn_matrices):
 	return attn_matrices[-1]
 
 
-class AttentionAggregator(nn.Module):
+class AttentionAggregator:
 
 	_AGG_METHODS = {
 		"sum": _agg_sum,
@@ -50,13 +48,15 @@ class AttentionAggregator(nn.Module):
 	}
 
 	def __init__(self, *, agg_method=None, **_):
-		super(AttentionAggregator, self).__init__()
 
 		if agg_method not in self._AGG_METHODS:
 			raise KeyError(f"Invalid attention matrix aggregation method ({agg_method}). "
 						   f"Valid values: [{self._AGG_METHODS.keys()}].")
 
 		self._agg_function = self._AGG_METHODS[agg_method]
+
+	def __call__(self, attn_matrices):
+		return self.forward(attn_matrices)
 
 	def forward(self, attn_matrices):
 		if not isinstance(attn_matrices, list):

@@ -1,9 +1,9 @@
 import torch.nn as nn
 
-from ..xatransformer import XATransformerEncoder, XATransformerEncoderLayer
+from .xatransformer import XATransformerEncoder, XATransformerEncoderLayer
 
 
-class EncTFMatcher(nn.Module):
+class TFEncMatcher(nn.Module):
 
 	def __init__(self,  *, feature_size,
 				 tf_xa_enc_nheads=4, tf_xa_enc_layers=1,
@@ -11,7 +11,7 @@ class EncTFMatcher(nn.Module):
 				 dropout=0.1,
 				 **_):
 
-		super(EncTFMatcher, self).__init__()
+		super().__init__()
 
 		xa_hiddn_size = (feature_size * 4) if tf_xa_hiddn_size is None else tf_xa_hiddn_size
 
@@ -24,7 +24,6 @@ class EncTFMatcher(nn.Module):
 
 	def forward(self, *, src_features, tgt_features, tgt_coords):
 		x = self.tf(q=src_features, k=tgt_features, v=tgt_coords)
-		attn_matrices = self.tf.attention
 		x = self.linear(x)
 
-		return x, attn_matrices
+		return x, self.tf.attention

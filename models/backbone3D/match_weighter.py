@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 
 
 def shannon_entropy(p, dim=-1, **_):
@@ -74,7 +73,7 @@ def berger_parker_index(p, dim=-1, normalize=True, **_):
 	return w
 
 
-def _weight_sum(p, dim=-1, **_):
+def weight_sum(p, dim=-1, **_):
 	"""
 
 	:param p:
@@ -85,7 +84,7 @@ def _weight_sum(p, dim=-1, **_):
 	return p.sum(dim=dim)
 
 
-def _uniform_weights(p, dim=-1, **_):
+def uniform_weights(p, dim=-1, **_):
 	"""
 
 	:param p:
@@ -97,21 +96,19 @@ def _uniform_weights(p, dim=-1, **_):
 	return torch.ones((b, m), device=p.device)
 
 
-class MatchWeighter(nn.Module):
+class MatchWeighter:
 
 	_WEIGHT_METHODS = {
 		"hill": {"f": norm_hill_number, "kwargs": {"dim": -1, "order": 1}},
 		"berger": {"f": berger_parker_index, "kwargs": {"dim": -1, "normalize": False}},
-		"weight_sum": {"f": _weight_sum, "kwargs": {"dim": 1}},
-		"uniform": {"f": _uniform_weights, "kwargs": {}},
-		None: {"f": _uniform_weights, "kwargs": {}},
+		"weight_sum": {"f": weight_sum, "kwargs": {"dim": 1}},
+		"uniform": {"f": uniform_weights, "kwargs": {}},
+		None: {"f": uniform_weights, "kwargs": {}},
 	}
 
 	def __init__(self, *,
 				 weighting_method: None,
 				 **kwargs):
-
-		super(MatchWeighter, self).__init__()
 
 		if weighting_method not in self._WEIGHT_METHODS:
 			raise KeyError(f"Invalid match-weighting method. Valid values: ({self._WEIGHT_METHODS.keys()}, None).")
@@ -122,6 +119,9 @@ class MatchWeighter(nn.Module):
 		for k in self._kwargs:
 			if k in kwargs:
 				self._kwargs[k] = kwargs[k]
+
+	def __call__(self, matching_matrices, **kwargs):
+		return self.forward(matching_matrices, **kwargs)
 
 	def forward(self, matching_matrices, **kwargs):
 		tmp_kwargs = self._kwargs.copy()
