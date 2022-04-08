@@ -157,7 +157,7 @@ class EncTFMatchingRegistration(nn.Module):
 
 class PyTransformerHead2(nn.Module):
 
-	def __init__(self, *, **kwargs):
+	def __init__(self, **kwargs):
 		super(PyTransformerHead2, self).__init__()
 
 		self.mod = EncTFMatchingRegistration(**kwargs)

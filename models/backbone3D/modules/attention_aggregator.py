@@ -2,15 +2,37 @@ import torch.nn as nn
 
 
 def _agg_sum(attn_matrices):
-	return attn_matrices
+	if len(attn_matrices) == 1:
+		return attn_matrices[0]
+
+	agg = attn_matrices[0]
+	for m in attn_matrices[1:]:
+		agg = agg + m
+
+	return agg
 
 
 def _agg_prod(attn_matrices):
-	return attn_matrices
+	if len(attn_matrices) == 1:
+		return attn_matrices[0]
+
+	agg = attn_matrices[0]
+	for m in attn_matrices[1:]:
+		agg = agg @ m
+
+	return agg
 
 
 def _agg_hadamard(attn_matrices):
-	return attn_matrices
+
+	if len(attn_matrices) == 1:
+		return attn_matrices[0]
+
+	agg = attn_matrices[0]
+	for m in attn_matrices[1:]:
+		agg = agg * m
+
+	return agg
 
 
 def _agg_last(attn_matrices):
