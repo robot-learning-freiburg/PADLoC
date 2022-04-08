@@ -78,17 +78,17 @@ class PyTransformerHead2(nn.Module):
 														  tgt_features=features_positive, tgt_coords=coords_positive)
 
 		batch_dict['transformation'] = tf
-		batch_dict['transport'] = matching.permute(1, 0, 2)
+		batch_dict['transport'] = matching
 		batch_dict['out_rotation'] = None
 		batch_dict['out_translation'] = None
-		batch_dict["sinkhorn_matches"] = tgt_coords_proj.permute(1, 0, 2)
+		batch_dict["sinkhorn_matches"] = tgt_coords_proj
 
 		if self.compute_inverse_tf:
 			tf2, tgt_coords_proj2, matching2, weights2 = self.mod(src_feat=features_positive, src_coord=coords_positive,
 																  tgt_feat=features_anchor, tgt_coord=coords_anchor)
 
 			batch_dict['transformation_2'] = tf2
-			batch_dict['transport'] = matching2.permute(1, 0, 2)
-			batch_dict["sinkhorn_matches_2"] = tgt_coords_proj2.permute(1, 0, 2)
+			batch_dict['transport'] = matching2
+			batch_dict["sinkhorn_matches_2"] = tgt_coords_proj2
 
 		return batch_dict
