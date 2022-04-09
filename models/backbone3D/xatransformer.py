@@ -213,7 +213,8 @@ class XATransformerEncoderLayer(nn.Module):
 		>>> out = encoder_layer(src)
 	"""
 
-	def __init__(self, d_model, nhead, kdim=None, vdim=None, dim_feedforward=2048, dropout=0.1, activation="relu"):
+	def __init__(self, d_model, nhead, kdim=None, vdim=None, dim_feedforward=2048, dropout=0.1, activation="relu",
+				 skip_conn1=True, skip_conn2=True):
 		super(XATransformerEncoderLayer, self).__init__()
 		self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, kdim=kdim, vdim=vdim)
 		# Implementation of Feedforward model
@@ -225,6 +226,9 @@ class XATransformerEncoderLayer(nn.Module):
 		self.norm2 = nn.LayerNorm(d_model)
 		self.dropout1 = nn.Dropout(dropout)
 		self.dropout2 = nn.Dropout(dropout)
+
+		self.skip_conn1 = skip_conn1
+		self.skip_conn2 = skip_conn2
 
 		self.activation = _get_activation_fn(activation)
 
@@ -250,10 +254,14 @@ class XATransformerEncoderLayer(nn.Module):
 		src2, attn = self.self_attn(query=q, key=k, value=v, attn_mask=src_mask,
 									key_padding_mask=src_key_padding_mask)
 		# TODO: Is adding Q as residual/skip the way to go??? At least that's how it works in the standard decoder's XA
-		src = q + self.dropout1(src2)
-		src = self.norm1(src)
-		src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
-		src = src + self.dropout2(src2)
+		src = self.dropout1(src2)
+		if self.skip_conn1:
+			src = q + src
+		src2 = self.norm1(src)
+		src = self.linear2(self.dropout(self.activation(self.linear1(src2))))
+		src = self.dropout2(src)
+		if self.skip_conn2:
+			src = src + src2
 		src = self.norm2(src)
 		return src, attn
 
