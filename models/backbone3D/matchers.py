@@ -35,4 +35,4 @@ class TFEncMatcher(nn.Module):
 		# x = self.vtf(q=x, k=tgt_features, v=tgt_coords)
 		x = self.linear(x)
 
-		return x, self.vtf.attention
+		return x, self.qtf.attention
