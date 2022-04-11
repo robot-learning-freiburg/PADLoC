@@ -298,7 +298,7 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                 loss_transl = torch.tensor([0.], device=device)
 
             if exp_cfg['weight_rot'] > 0.:
-                if exp_cfg['head'] in ["SuperGlue", "Transformer", "PyTransformer", "PyTransformer2", "MLFeatTF"] \
+                if exp_cfg['head'] in ["SuperGlue", "Transformer", "PyTransformer", "TFHead", "MLFeatTF"] \
                         and exp_cfg['sinkhorn_aux_loss']:
                     aux_loss = sinkhorn_matches_loss(batch_dict, delta_pose, mode=mode)
                     if torch.any(torch.isnan(aux_loss)):

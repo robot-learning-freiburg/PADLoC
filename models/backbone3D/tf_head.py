@@ -1,25 +1,18 @@
 from torch import nn
 
-from .matchers import TFEncMatcher
+from .matchers import Matcher
 from .registration import SVDRegistration
-from .attention_aggregator import AttentionAggregator
 from .match_weighter import MatchWeighter
 from .utils import split_apn_data
 
 
-class EncTFMatchingRegistration(nn.Module):
+class TFMatchingRegistration(nn.Module):
 
 	def __init__(self, **kwargs):
 		super().__init__()
 
-		# kw_args = locals().copy()
-		# kw_args.pop('self')  # Get rid of self and other *args
-		# kw_args.pop('__class__')
-		# kw_args.pop("kwargs")
-		# kw_args.update(kwargs)
+		self.matcher = Matcher(**kwargs)
 
-		self.matcher = TFEncMatcher(**kwargs)
-		self.attn_agg = AttentionAggregator(agg_method=kwargs.get("attn_agg_method"))
 		self.match_weighter = MatchWeighter(weighting_method=kwargs.get("point_weighting_method"),
 											order=kwargs.get("point_weighting_method_order", 2),
 											normalize=kwargs.get("normalize_point_weights", False))
@@ -35,22 +28,21 @@ class EncTFMatchingRegistration(nn.Module):
 		:return:
 		"""
 
-		tgt_coords_proj, attn = self.matcher(src_features=src_features,
+		tgt_coords_proj, matching = self.matcher(src_features=src_features,
 											 tgt_features=tgt_features, tgt_coords=tgt_coords.permute(1, 0, 2))
-		agg_attn = self.attn_agg(attn)
-		tgt_coords_weights = self.match_weighter(agg_attn)
+		tgt_coords_weights = self.match_weighter(matching)
 		tgt_coords_proj = tgt_coords_proj.permute(1, 0, 2)  # Shape: (B x T, P, 3)
 		transform = self.register(src_coords=src_coords, tgt_coords=tgt_coords_proj, weights=tgt_coords_weights)
 
-		return transform, tgt_coords_proj, agg_attn, tgt_coords_weights
+		return transform, tgt_coords_proj, matching, tgt_coords_weights
 
 
-class PyTransformerHead2(nn.Module):
+class TFHead(nn.Module):
 
 	def __init__(self, **kwargs):
 		super().__init__()
 
-		self.mod = EncTFMatchingRegistration(**kwargs)
+		self.mod = TFMatchingRegistration(**kwargs)
 
 		self.compute_inverse_tf = kwargs.get("panoptic_loss", 0) > 0 or \
 								  kwargs.get("inv_tf_weight", 0) > 0 or \

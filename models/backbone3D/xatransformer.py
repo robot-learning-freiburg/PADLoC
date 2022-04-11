@@ -118,7 +118,7 @@ class SATransformerEncoderLayer(nn.Module):
 	def __setstate__(self, state):
 		if 'activation' not in state:
 			state['activation'] = F.relu
-		super(XATransformerEncoderLayer, self).__setstate__(state)
+		super(SATransformerEncoderLayer, self).__setstate__(state)
 
 	def forward(self, src: Tensor, src_mask: Optional[Tensor] = None,
 				src_key_padding_mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
@@ -165,7 +165,7 @@ class XATransformerEncoder(nn.Module):
 		self.norm = norm
 		self.attention = []
 
-	def forward(self, *, k: Tensor, q: Tensor, v: Tensor,
+	def forward(self, *, q: Tensor, k: Tensor, v: Tensor,
 				mask: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None
 				) -> Tensor:
 		r"""Pass the input through the encoder layers in turn.
@@ -227,6 +227,10 @@ class XATransformerEncoderLayer(nn.Module):
 		self.dropout1 = nn.Dropout(dropout)
 		self.dropout2 = nn.Dropout(dropout)
 
+		valid_skip_conn1 = ["q", "k", "v", None, False]
+		if skip_conn1 not in valid_skip_conn1:
+			raise ValueError(f"Invalid skip_conn1 value ({skip_conn1}. Valid values: [{valid_skip_conn1}].")
+
 		self.skip_conn1 = skip_conn1
 		self.skip_conn2 = skip_conn2
 
@@ -237,7 +241,8 @@ class XATransformerEncoderLayer(nn.Module):
 			state['activation'] = F.relu
 		super(XATransformerEncoderLayer, self).__setstate__(state)
 
-	def forward(self, *, q: Tensor, k: Tensor, v: Tensor, src_mask: Optional[Tensor] = None,
+	def forward(self, *, q: Tensor, k: Tensor, v: Tensor,
+				src_mask: Optional[Tensor] = None,
 				src_key_padding_mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
 		r"""Pass the input through the encoder layer.
 		TODO
@@ -253,7 +258,7 @@ class XATransformerEncoderLayer(nn.Module):
 		"""
 		src2, attn = self.self_attn(query=q, key=k, value=v, attn_mask=src_mask,
 									key_padding_mask=src_key_padding_mask)
-		# TODO: Is adding Q as residual/skip the way to go??? At least that's how it works in the standard decoder's XA
+
 		src = self.dropout1(src2)
 		if self.skip_conn1 == "q":
 			src = q + src
@@ -261,6 +266,7 @@ class XATransformerEncoderLayer(nn.Module):
 			src = k + src
 		elif self.skip_conn1 == "v":
 			src = v + src
+
 		src2 = self.norm1(src)
 		src = self.linear2(self.dropout(self.activation(self.linear1(src2))))
 		src = self.dropout2(src)
@@ -295,8 +301,8 @@ class XATransformerDecoder(nn.Module):
 		self.attention_self = []
 		self.attention_cross = []
 
-	def forward(self, tgt_k: Tensor, tgt_q: Tensor, tgt_v: Tensor,
-				src_k: Tensor, src_q: Tensor,
+	def forward(self, *, tgt_q: Tensor, tgt_k: Tensor, tgt_v: Tensor,
+				src_k: Tensor, src_v: Tensor,
 				tgt_mask: Optional[Tensor] = None, src_mask: Optional[Tensor] = None,
 				tgt_key_padding_mask: Optional[Tensor] = None,
 				src_key_padding_mask: Optional[Tensor] = None) -> Tensor:
@@ -316,13 +322,13 @@ class XATransformerDecoder(nn.Module):
 		Shape:
 			see the docs in Transformer class.
 		"""
-		output = tgt_v
+		output = tgt_q
 		self.attention_self = []
 		self.attention_cross = []
 
 		for mod in self.layers:
-			output, attn_self, attn_cross = mod(tgt_k=output, tgt_q=tgt_q, tgt_v=output,
-												src_k=src_k, src_q=src_q,
+			output, attn_self, attn_cross = mod(tgt_q=output, tgt_k=tgt_k, tgt_v=tgt_v,
+												src_k=src_k, src_q=src_v,
 												tgt_mask=tgt_mask,
 												src_mask=src_mask,
 												tgt_key_padding_mask=tgt_key_padding_mask,
@@ -391,8 +397,8 @@ class XATransformerDecoderLayer(nn.Module):
 			state['activation'] = F.relu
 		super(XATransformerDecoderLayer, self).__setstate__(state)
 
-	def forward(self, tgt_k: Tensor, tgt_q: Tensor, tgt_v: Tensor,
-				src_k: Tensor, src_q: Tensor,
+	def forward(self, *, tgt_q: Tensor, tgt_k: Tensor, tgt_v: Tensor,
+				src_k: Tensor, src_v: Tensor,
 				tgt_mask: Optional[Tensor] = None, src_mask: Optional[Tensor] = None,
 				tgt_key_padding_mask: Optional[Tensor] = None,
 				src_key_padding_mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor, Tensor]:
@@ -416,9 +422,9 @@ class XATransformerDecoderLayer(nn.Module):
 		tgt2, attn_self = self.self_attn(query=tgt_q, key=tgt_k, value=tgt_v,
 										 attn_mask=tgt_mask,
 										 key_padding_mask=tgt_key_padding_mask)
-		tgt = tgt_v + self.dropout1(tgt2)
+		tgt = tgt_q + self.dropout1(tgt2)
 		tgt = self.norm1(tgt)
-		tgt2, attn_cross = self.multihead_attn(query=src_q, key=src_k, value=tgt,
+		tgt2, attn_cross = self.multihead_attn(query=tgt, key=src_k, value=src_v,
 											   attn_mask=src_mask,
 											   key_padding_mask=src_key_padding_mask)
 

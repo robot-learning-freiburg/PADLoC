@@ -43,8 +43,7 @@ class AttentionAggregator:
 		"sum": _agg_sum,
 		"product": _agg_prod,
 		"hadamard": _agg_hadamard,
-		"last": _agg_last,
-		None: _agg_last
+		"last": _agg_last
 	}
 
 	def __init__(self, *, agg_method=None, **_):
