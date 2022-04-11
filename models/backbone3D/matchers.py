@@ -20,19 +20,19 @@ class TFEncMatcher(nn.Module):
 		sa_qenc_layer = XATransformerEncoderLayer(d_model=feature_size, nhead=tf_xa_enc_nheads,
 												 kdim=feature_size, vdim=3,
 												 dim_feedforward=xa_hiddn_size, dropout=dropout,
-												 skip_conn1="q", skip_conn2=True)
-		sa_venc_layer = XATransformerEncoderLayer(d_model=feature_size, nhead=tf_xa_enc_nheads,
-												  kdim=feature_size, vdim=3,
-												  dim_feedforward=xa_hiddn_size, dropout=dropout,
-												  skip_conn1=None, skip_conn2=True)
+												 skip_conn1="k", skip_conn2=True)
+		# sa_venc_layer = XATransformerEncoderLayer(d_model=feature_size, nhead=tf_xa_enc_nheads,
+		# 										  kdim=feature_size, vdim=3,
+		# 										  dim_feedforward=xa_hiddn_size, dropout=dropout,
+		# 										  skip_conn1=None, skip_conn2=True)
 		self.qtf = XATransformerEncoder(sa_qenc_layer, num_layers=tf_xa_enc_layers)
-		self.vtf = XATransformerEncoder(sa_venc_layer, num_layers=1)
+		# self.vtf = XATransformerEncoder(sa_venc_layer, num_layers=1)
 
 		self.linear = nn.Linear(feature_size, 3)
 
 	def forward(self, *, src_features, tgt_features, tgt_coords):
-		x = self.qtf(q=src_features, k=tgt_features, v=tgt_features)
-		x = self.vtf(q=x, k=tgt_features, v=tgt_coords)
+		x = self.qtf(q=src_features, k=tgt_features, v=tgt_coords)
+		# x = self.vtf(q=x, k=tgt_features, v=tgt_coords)
 		x = self.linear(x)
 
 		return x, self.vtf.attention
