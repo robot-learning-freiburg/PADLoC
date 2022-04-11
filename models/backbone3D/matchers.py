@@ -31,8 +31,8 @@ class TFEncMatcher(nn.Module):
 		self.linear = nn.Linear(feature_size, 3)
 
 	def forward(self, *, src_features, tgt_features, tgt_coords):
-		x = self.tf(q=src_features, k=tgt_features, v=tgt_features)
-		x = self.tf(q=x, k=tgt_features, v=tgt_coords)
+		x = self.qtf(q=src_features, k=tgt_features, v=tgt_features)
+		x = self.vtf(q=x, k=tgt_features, v=tgt_coords)
 		x = self.linear(x)
 
-		return x, self.tf.attention
+		return x, self.vtf.attention
