@@ -214,7 +214,7 @@ class XATransformerEncoderLayer(nn.Module):
 	"""
 
 	def __init__(self, d_model, nhead, kdim=None, vdim=None, dim_feedforward=2048, dropout=0.1, activation="relu",
-				 skip_conn1=True, skip_conn2=True):
+				 skip_conn1="q", skip_conn2=True):
 		super(XATransformerEncoderLayer, self).__init__()
 		self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, kdim=kdim, vdim=vdim)
 		# Implementation of Feedforward model
@@ -255,8 +255,12 @@ class XATransformerEncoderLayer(nn.Module):
 									key_padding_mask=src_key_padding_mask)
 		# TODO: Is adding Q as residual/skip the way to go??? At least that's how it works in the standard decoder's XA
 		src = self.dropout1(src2)
-		if self.skip_conn1:
+		if self.skip_conn1 == "q":
 			src = q + src
+		elif self.skip_conn1 == "k":
+			src = k + src
+		elif self.skip_conn1 == "v":
+			src = v + src
 		src2 = self.norm1(src)
 		src = self.linear2(self.dropout(self.activation(self.linear1(src2))))
 		src = self.dropout2(src)
