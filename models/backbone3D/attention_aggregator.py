@@ -16,7 +16,8 @@ def _agg_prod(attn_matrices):
 
 	agg = attn_matrices[0]
 	for m in attn_matrices[1:]:
-		agg = agg @ m
+		# (Am * (... (A2 * (A1 * (A0))))) ???
+		agg = m @ agg
 
 	return agg
 
