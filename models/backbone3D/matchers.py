@@ -57,6 +57,7 @@ class TFMLEncMatcher(nn.Module):
 												   kdim=feature_size, vdim=feature_size,
 												   dim_feedforward=xa_hiddn_size, dropout=dropout,
 												   skip_conn1="q", skip_conn2=tf_skip_conn2)
+		feat_norm = nn.LayerNorm(feature_size)
 		# Encoder Layer for Single-Layer Coordinate Encoder
 		enc_layer = XATransformerEncoderLayer(d_model=feature_size, nhead=tf_xa_enc_nheads,
 											  kdim=feature_size, vdim=3,
@@ -64,7 +65,7 @@ class TFMLEncMatcher(nn.Module):
 											  skip_conn1=None, skip_conn2=tf_skip_conn2)
 
 		# Multi-Layer Feature Encoder
-		self.feat_tf = XATransformerEncoder(feat_enc_layer, num_layers=tf_xa_enc_layers)
+		self.feat_tf = XATransformerEncoder(feat_enc_layer, num_layers=tf_xa_enc_layers, norm=feat_norm)
 		# Single-Layer Coordinate Encoder
 		self.tf = XATransformerEncoder(enc_layer, num_layers=1)
 
