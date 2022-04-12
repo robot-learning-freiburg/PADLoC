@@ -92,8 +92,14 @@ def uniform_weights(p, dim=-1, **_):
 	:param _:
 	:return:
 	"""
-	b, m, _ = p[dim].shape
-	return torch.ones((b, m), device=p.device)
+
+	shape = p.shape
+
+	if dim < 0:
+		dim = len(shape) + dim
+
+	shape = shape[:dim] + shape[dim + 1:]
+	return torch.ones(shape, device=p.device)
 
 
 class MatchWeighter:
