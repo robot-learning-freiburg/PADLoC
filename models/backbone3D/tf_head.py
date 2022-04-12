@@ -1,4 +1,5 @@
 from torch import nn
+import torch.nn.functional as F
 
 from .matchers import Matcher
 from .registration import SVDRegistration
@@ -59,8 +60,8 @@ class TFHead(nn.Module):
 
 		features = features.permute(2, 0, 1)  # Shape: (P, B x T, F)
 
-		# Normalize Features for some reason. Probably not required, since the KQV weights will mess them up anyways
-		# features = F.normalize(features, dim=2)
+		# Critical!: Normalize Features so that all have the same magnitude.
+		features = F.normalize(features, dim=2)
 
 		# Split into anchor and positive features/coordinates
 		features_anchor, features_positive = split_apn_data(features, mode=mode, slice_dim=1, get_negatives=False)
