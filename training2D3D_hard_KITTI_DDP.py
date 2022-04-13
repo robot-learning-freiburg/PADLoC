@@ -23,7 +23,7 @@ from datasets.KITTI360Dataset import KITTI3603DDictPairs, KITTI3603DPoses
 from datasets.KITTI_data_loader import KITTILoader3DPoses, KITTILoader3DDictPairs
 from datasets.NCLTDataset import NCLTDatasetPairs, NCLTDataset, NCLTDatasetTriplets
 from loss import smooth_metric_lossv2, NPair_loss, Circle_Loss, TripletLoss, sinkhorn_matches_loss, pose_loss,\
-    panoptic_mismatch_loss, inverse_tf_loss, rottrace_loss
+    panoptic_mismatch_loss, inverse_tf_loss, rottrace_loss, reverse_pose_loss, reverse_sinkhorn_matches_loss
 from models.backbone3D.RandLANet.RandLANet import prepare_randlanet_input
 from models.backbone3D.RandLANet.helper_tool import ConfigSemanticKITTI2
 from models.get_models import get_model
@@ -298,12 +298,21 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                 loss_transl = torch.tensor([0.], device=device)
 
             if exp_cfg['weight_rot'] > 0.:
+                rot_loss_weight2 = 1
                 if exp_cfg['head'] in ["SuperGlue", "Transformer", "PyTransformer", "TFHead", "MLFeatTF"] \
                         and exp_cfg['sinkhorn_aux_loss']:
                     aux_loss = sinkhorn_matches_loss(batch_dict, delta_pose, mode=mode)
                     if torch.any(torch.isnan(aux_loss)):
                         raise NaNLossError("Sinkhorn Aux Loss has NAN")
                     other_loss_dict["Loss: Sinkhorn Aux"] = aux_loss
+
+                    if exp_cfg["inv_tf_weight"] > 0:
+                        rev_aux_loss = reverse_sinkhorn_matches_loss(batch_dict, delta_pose, mode=mode)
+                        if torch.any(torch.isnan(rev_aux_loss)):
+                            raise NaNLossError("Reverse Sinkhorn Aux Loss has NAN.")
+                        other_loss_dict["Loss: Reverse Sinkhorn Aux"] = rev_aux_loss
+                        aux_loss += rev_aux_loss
+                        aux_loss /= 2
                 else:
                     aux_loss = torch.tensor([0.], device=device)
                 if exp_cfg['rot_representation'] == 'sincos':
@@ -364,6 +373,13 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                         loss_rot = loss_rot + (tra_weight / exp_cfg['weight_rot']) * loss_transl
                     else:
                         loss_rot = pose_loss(batch_dict, delta_pose, mode=mode)
+                        if exp_cfg["inv_tf_weight"] > 0:
+                            rev_loss_rot = reverse_pose_loss(batch_dict, delta_pose, mode=mode)
+                        if torch.any(torch.isnan(rev_loss_rot)):
+                            raise NaNLossError("Reverse Rot Loss has NAN.")
+                        other_loss_dict["Loss: Reverse Rot"] = rev_loss_rot
+                        rot_loss_weight2 = 0.5
+                        total_loss += exp_cfg["weight_rot"] * rot_loss_weight2 * rev_loss_rot
                     if torch.any(torch.isnan(loss_rot)):
                         raise NaNLossError("Rot Loss has NAN")
                     if exp_cfg['head'] == "SuperGlue" and exp_cfg['sinkhorn_type'] == 'slack':
@@ -374,11 +390,10 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                         other_loss_dict["Loss: Inlier"] = inlier_loss
                         loss_rot += 0.01 * inlier_loss
 
-                total_loss = total_loss + exp_cfg['weight_rot']*(loss_rot + 0.05*aux_loss)
+                total_loss = total_loss + exp_cfg['weight_rot']*((rot_loss_weight2 * loss_rot) + 0.05*aux_loss)
             else:
                 loss_rot = torch.tensor([0.], device=device)
 
-            loss_panoptic = torch.zeros(1)
             if exp_cfg['panoptic_weight'] > 0:
                 loss_panoptic = panoptic_mismatch_loss(batch_dict)
                 if torch.any(torch.isnan(loss_panoptic)):
@@ -386,12 +401,19 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                 other_loss_dict["Loss: Panoptic Mismatch"] = loss_panoptic
                 total_loss = total_loss + exp_cfg['panoptic_weight'] * loss_panoptic
 
-            if exp_cfg['inv_tf_weight'] > 0 and exp_cfg['head'] == "Transformer":
-                loss_inv_tf = inverse_tf_loss(batch_dict)
-                if torch.any(torch.isnan(loss_inv_tf)):
-                    raise NaNLossError("Inverse Transform Loss has NaN.")
-                other_loss_dict["Loss: Inverse Transform"] = loss_inv_tf
-                total_loss = total_loss + exp_cfg['inv_tf_weight'] * loss_inv_tf
+            if exp_cfg["semantic_weight"] > 0:
+                pass # TODO
+
+            if exp_cfg["supersem_weight"] > 0:
+                pass  # TODO
+
+            # Using instead the reverse_pose_loss() and reverse_sinkhorn_matches_loss()
+            # if exp_cfg['inv_tf_weight'] > 0 and exp_cfg['head'] == "Transformer":
+            #     loss_inv_tf = inverse_tf_loss(batch_dict)
+            #     if torch.any(torch.isnan(loss_inv_tf)):
+            #         raise NaNLossError("Inverse Transform Loss has NaN.")
+            #     other_loss_dict["Loss: Inverse Transform"] = loss_inv_tf
+            #     total_loss = total_loss + exp_cfg['inv_tf_weight'] * loss_inv_tf
 
             if exp_cfg['weight_metric_learning'] > 0.:
                 if exp_cfg['norm_embeddings']:

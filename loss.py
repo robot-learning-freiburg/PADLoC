@@ -265,6 +265,8 @@ def reverse_points(points, mode="pairs"):
 
     reverse_points[:B] = points[B:2*B]
     reverse_points[B:2*B] = points[:B]
+    if T == 3:
+        reverse_points[2*B:] = points[2*B:]
 
     return reverse_points
 
@@ -272,10 +274,16 @@ def reverse_points(points, mode="pairs"):
 def reverse_batchdict_tf(batch_dict, delta_pose, mode="pairs"):
     # Point coordinates should be reversed, i.e.:
     # from (anchor, positive, ...) to (positive, anchor, ...)
-    rev_point_coords = reverse_points(batch_dict["point_coords"], mode=mode)
+    point_coords = batch_dict["point_coords"]
+    point_coords = point_coords.clone().view(batch_dict['batch_size'], -1, 4)
+
+    rev_point_coords = reverse_points(point_coords, mode=mode)
+
+    rev_point_coords = rev_point_coords.view(-1, 4)
+
 
     # The relative pose should be the inverse of the GT
-    inv_delta_pose = delta_pose.double().inverse()
+    inv_delta_pose = delta_pose.double().inverse().float()
 
     # Remap arguments in a new dict, namely the reverse transformation
     rev_batch_dict = {
