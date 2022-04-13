@@ -256,6 +256,53 @@ def sinkhorn_matches_loss(batch_dict, delta_pose, mode='pairs'):
     return loss
 
 
+def reverse_points(points, mode="pairs"):
+    BT = points.shape[0]
+    T = 2 if mode == "pairs" else 3
+    B = BT // T
+
+    reverse_points = torch.empty_like(points, dtype=points.dtype, device=points.device)
+
+    reverse_points[:B] = points[B:2*B]
+    reverse_points[B:2*B] = points[:B]
+
+    return reverse_points
+
+
+def reverse_batchdict_tf(batch_dict, delta_pose, mode="pairs"):
+    # Point coordinates should be reversed, i.e.:
+    # from (anchor, positive, ...) to (positive, anchor, ...)
+    rev_point_coords = reverse_points(batch_dict["point_coords"], mode=mode)
+
+    # The relative pose should be the inverse of the GT
+    inv_delta_pose = delta_pose.double().inverse()
+
+    # Remap arguments in a new dict, namely the reverse transformation
+    rev_batch_dict = {
+        "point_coords": rev_point_coords,
+        "batch_size": batch_dict['batch_size'],
+        "sinkhorn_matches": batch_dict["sinkhorn_matches2"],
+        "transformation": batch_dict['transformation2']
+    }
+
+    return rev_batch_dict, inv_delta_pose
+
+
+def reverse_sinkhorn_matches_loss(batch_dict, delta_pose, mode="pairs"):
+    """
+    Computes the sinkorn matches loss for the matches computed by reversing the input point clouds.
+
+    :param batch_dict:
+    :param delta_pose:
+    :param mode:
+    :return:
+    """
+
+    reverse_batch_dict, inv_delta_pose = reverse_batchdict_tf(batch_dict, delta_pose, mode=mode)
+
+    return sinkhorn_matches_loss(reverse_batch_dict, inv_delta_pose, mode=mode)
+
+
 def pose_loss(batch_dict, delta_pose, mode='pairs'):
     src_coords = batch_dict['point_coords']
     src_coords = src_coords.clone().view(batch_dict['batch_size'], -1, 4)
@@ -276,6 +323,13 @@ def pose_loss(batch_dict, delta_pose, mode='pairs'):
     loss = torch.mean(torch.abs(pred_dst_coords - gt_dst_coords))
     # loss = (pred_dst_coords - gt_dst_coords).norm(dim=2).mean()
     return loss
+
+
+def reverse_pose_loss(batch_dict, delta_pose, mode='pairs'):
+
+    reverse_batch_dict, inv_delta_pose = reverse_batchdict_tf(batch_dict, delta_pose, mode=mode)
+
+    return pose_loss(reverse_batch_dict, inv_delta_pose, mode=mode)
 
 
 def rpm_loss_for_rpmnet(points_src, transformations, delta_pose, mode='pairs'):
@@ -336,7 +390,12 @@ def panoptic_mismatch_loss(batch_dict):
 def inverse_tf_loss(batch_dict):
     """
         Loss of multiplying the transformation of PC1 -> PC2 and that of the reverse (PC2 -> PC1)
-        and comparing it to the identity matrix
+        and comparing it to the identity matrix.
+
+        DON'T USE.
+        Instead use the reverse_pose_loss and reverse_sinkhorn_matches_loss.
+        Better to learn the actual inverse transformation,
+        than to learn that they must be inverse matrices to each other.
     """
 
     tf_mat_a = batch_dict['transformation']

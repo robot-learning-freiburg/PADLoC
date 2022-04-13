@@ -60,7 +60,7 @@ def _init_fn(worker_id, epoch=0, seed=0):
 
 
 def move_from_sample_to_model_in(exp_cfg, sample, model_in):
-    if exp_cfg['instance_matching_loss'] or exp_cfg['semantic_matching_cost']:
+    if (exp_cfg["load_panoptic"] or exp_cfg["load_semantic"]) and not exp_cfg["use_logits"]:
         input_types = ["anchor", "positive", "negative"]
         data_type_suffixes = ["panoptic", "semantic", "instance", "supersem"]
         panoptic_keys = [i + "_" + t for i in input_types for t in data_type_suffixes]
@@ -694,20 +694,31 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     cfg_use_panoptic = exp_cfg.get("use_panoptic", False)
     cfg_filter_dynamic = exp_cfg.get("filter_dynamic", False)
     cfg_dynamic_classes = exp_cfg.get("dynamic_classes")
-    cfg_instance_matching_loss = exp_cfg.get("instance_matching_loss", False)
-    cfg_semantic_matching_cost = exp_cfg.get("semantic_matching_cost", False)
-    exp_cfg["load_semantic"] = cfg_load_semantic
-    exp_cfg["load_panoptic"] = cfg_load_panoptic
+    cfg_panoptic_weight = exp_cfg.get("panoptic_weight", 0.0)
+    cfg_semantic_weight = exp_cfg.get("semantic_weight", 0.0)
+    cfg_supersem_weight = exp_cfg.get("supersem_weight", 0.0)
+    cfg_semantic_matching_cost = exp_cfg.get("semantic_matching_cost", 0.0)
+    use_logits = exp_cfg.get("use_logits", False)
+
+    load_semantic = cfg_load_semantic or cfg_use_semantic or \
+                    cfg_panoptic_weight > 0 or cfg_semantic_weight > 0 or cfg_supersem_weight > 0 or \
+                    cfg_semantic_matching_cost > 0
+    load_panoptic = cfg_load_panoptic or cfg_use_panoptic or \
+                    cfg_panoptic_weight > 0 or cfg_semantic_weight > 0 or cfg_supersem_weight > 0 or \
+                    cfg_semantic_matching_cost > 0
+
+    exp_cfg["load_semantic"] = load_semantic
+    exp_cfg["load_panoptic"] = load_panoptic
     exp_cfg["use_semantic"] = cfg_use_semantic
     exp_cfg["use_panoptic"] = cfg_use_panoptic
-    exp_cfg["instance_matching_loss"] = cfg_instance_matching_loss
+    exp_cfg["use_logits"] = use_logits
+    exp_cfg["panoptic_weight"] = cfg_panoptic_weight
+    exp_cfg["semantic_weight"] = cfg_semantic_weight
+    exp_cfg["supersem_weight"] = cfg_supersem_weight
     exp_cfg["semantic_matching_cost"] = cfg_semantic_matching_cost
     exp_cfg["filter_dynamic"] = cfg_filter_dynamic
     exp_cfg["dynamic_classes"] = cfg_dynamic_classes
 
-    load_semantic = cfg_load_semantic or cfg_use_semantic or cfg_instance_matching_loss or cfg_semantic_matching_cost
-    load_panoptic = cfg_load_panoptic or cfg_use_panoptic or cfg_instance_matching_loss or cfg_semantic_matching_cost
-    use_logits = exp_cfg.get("use_logits", True)
 
     if args.dataset == 'kitti':
         if exp_cfg['mode'] == 'pairs':

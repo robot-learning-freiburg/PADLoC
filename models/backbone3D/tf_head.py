@@ -45,7 +45,7 @@ class TFHead(nn.Module):
 
 		self.mod = TFMatchingRegistration(**kwargs)
 
-		self.compute_inverse_tf = kwargs.get("panoptic_loss", 0) > 0 or \
+		self.compute_inverse_tf = kwargs.get("panoptic_weight", 0) > 0 or \
 								  kwargs.get("inv_tf_weight", 0) > 0 or \
 								  kwargs.get("semantic_weight", 0) > 0 or \
 								  kwargs.get("supersem_weight", 0) > 0
@@ -77,11 +77,11 @@ class TFHead(nn.Module):
 		batch_dict["sinkhorn_matches"] = tgt_coords_proj
 
 		if self.compute_inverse_tf:
-			tf2, tgt_coords_proj2, matching2, weights2 = self.mod(src_feat=features_positive, src_coord=coords_positive,
-																  tgt_feat=features_anchor, tgt_coord=coords_anchor)
+			tf2, tgt_coords_proj2, matching2, weights2 = self.mod(src_features=features_positive, src_coords=coords_positive,
+																  tgt_features=features_anchor, tgt_coords=coords_anchor)
 
-			batch_dict['transformation_2'] = tf2
-			batch_dict['transport'] = matching2
-			batch_dict["sinkhorn_matches_2"] = tgt_coords_proj2
+			batch_dict['transformation2'] = tf2
+			batch_dict['transport2'] = matching2
+			batch_dict["sinkhorn_matches2"] = tgt_coords_proj2
 
 		return batch_dict
