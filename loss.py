@@ -157,12 +157,14 @@ def _remap_label(value, mapping_dict: Optional[Dict[int, int]] = None):
     return remapped_value
 
 
-def _loss_miss_classification(*, match_p2a, labels1, labels2_one_hot, cce=True):
+def _loss_miss_classification(*, match_p2a, labels1_one_hot, labels2_one_hot, cce=True):
     pred_labels1_one_hot = torch.bmm(match_p2a, labels2_one_hot)
 
     # Categorical Cross-Entropy loss between the one-hot encoded predicted tensor and the true indices
     if cce:
-        masked_pred_labels_1 = pred_labels1_one_hot[labels1]  # Only select the entry for the true label
+        masked_pred_labels_1 = pred_labels1_one_hot * labels1_one_hot
+        masked_pred_labels_1 = masked_pred_labels_1.sum(-1)  # Only select the entry for the true label
+        # masked_pred_labels_1 = pred_labels1_one_hot[labels1]  # Only select the entry for the true label
         masked_pred_labels_1 = 1e-8 + masked_pred_labels_1  # To avoid getting NANs if the prediction is 0
         masked_pred_labels_1 = masked_pred_labels_1.clamp(0., 1.)  # To avoid having values larger than 1
         loss = - torch.log(masked_pred_labels_1)  # CCE Loss
@@ -170,7 +172,7 @@ def _loss_miss_classification(*, match_p2a, labels1, labels2_one_hot, cce=True):
         return loss
 
     # Mean Square Error between the predicted and true one-hot encoded tensors
-    err_mat = labels1 - pred_labels1_one_hot
+    err_mat = labels1_one_hot - pred_labels1_one_hot
     err_vec = err_mat.square().sum(-1)
     loss = err_vec.mean()
     return loss
@@ -212,26 +214,28 @@ def _loss_meta_semantic(batch_dict, *, meta, reverse_loss=False, **_):
 
     # Encode labels as one-hot
     n_classes = max([max(mapping.values()) for mapping in oh_mapping]) + 1  # Number of different labels
+    lbl1_oh = F.one_hot(lbl1_remap, n_classes)
     lbl2_oh = F.one_hot(lbl2_remap, n_classes)
     # Recast as floats, otherwise BMM in loss complains :S
+    lbl1_oh = lbl1_oh.to(torch.float32)
     lbl2_oh = lbl2_oh.to(torch.float32)
     # Detach to get rid of any gradient, since it is the ground truth
+    lbl1_oh = lbl1_oh.detach()
     lbl2_oh = lbl2_oh.detach()
 
     loss_dict = {
         # "": _loss_miss_classification(match_p2a=match_p2a, labels1=lbl1_oh, labels2_one_hot=lbl2_oh, cce=False) # MSE
-        "": _loss_miss_classification(match_p2a=match_p2a, labels1=lbl1_remap, labels2_one_hot=lbl2_oh, cce=True)
+        "": _loss_miss_classification(match_p2a=match_p2a, labels1_one_hot=lbl1_oh, labels2_one_hot=lbl2_oh, cce=True)
     }
 
     if reverse_loss:
         match_a2p = _get_normalized_matching(batch_dict, pos2anc=False)
-        lbl1_oh = F.one_hot(lbl1_remap, n_classes)
-        lbl1_oh = lbl1_oh.to(torch.float32)
-        lbl1_oh = lbl1_oh.detach()
+
         # loss_dict[_REVERSE_L_SUFFIX] = _loss_miss_classification(match_p2a=match_a2p,
         #                                                    labels1=lbl2_oh, labels2_one_hot=lbl1_oh, cce=False) # MSE
         loss_dict[_REVERSE_L_SUFFIX] = _loss_miss_classification(match_p2a=match_a2p,
-                                                                 labels1=lbl2_remap, labels2_one_hot=lbl1_oh, cce=True)
+                                                                 labels1_one_hot=lbl2_oh, labels2_one_hot=lbl1_oh,
+                                                                 cce=True)
 
     return loss_dict
 
@@ -254,8 +258,15 @@ def _loss_panoptic(*, match_a2p, match_p2a, obj1, obj2):
     loss = masked_err.abs()  # to get bigger values and more resolution
     # loss = loss.sum([1, 2]) # Don't sum them per matrix, otherwise huge values (~400'000) that depend on points_num
     # loss = loss.mean()  # Don't average of all values, there are a ton of zeros in the matrix, lowering the mean
-    loss = loss[loss != 0.].mean([1, 2])  # mean over the matrices, since each matrix will have diff. no. of non-zeros
-    loss = loss.mean()  # mean over the batches, since each matrix mean will have different denominators
+    batch_dim = match_a2p.shape[0]
+    batch_mean_losses = torch.zeros(batch_dim, device=match_a2p.device)
+    for i in range(batch_dim):
+        batch_loss = loss[i]
+        batch_loss_non_zero = batch_loss[batch_loss != 0.]  # Keep only non-zero entries.
+        # Compute mean over the matrices, since each matrix will have diff. number of non-zero edges
+        batch_mean_loss = batch_loss_non_zero.mean()
+        batch_mean_losses[i] = batch_mean_loss
+    loss = batch_mean_losses.mean()  # mean over the batches, since each matrix mean will have different denominators
     return loss
 
 

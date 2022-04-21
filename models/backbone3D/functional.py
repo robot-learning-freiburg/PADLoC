@@ -27,7 +27,7 @@ def vector_pairwise_diff(a, b=None):
 	"""
 
 	a_dim = a.dim()
-	if a_dim != 1 or a_dim != 2:
+	if a_dim != 1 and a_dim != 2:
 		raise TypeError("Only for 1 and 2D tensors.")
 	batch_a, channel_a = a.size()
 
