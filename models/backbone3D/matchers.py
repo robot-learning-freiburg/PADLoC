@@ -4,6 +4,12 @@ from .xatransformer import XATransformerEncoder, XATransformerEncoderLayer
 from .attention_aggregator import AttentionAggregator
 
 
+def normalize_matching(matching):
+	matching_rows = matching.sum(2, keepdim=True)
+	matching_rows[matching_rows < 1e-6] = 1  # Ignore rows that add up to 0 (Set to one to avoid division by 0)
+	return matching / matching_rows
+
+
 class TFEncMatcher(nn.Module):
 
 	def __init__(self,  *, feature_size,
@@ -92,7 +98,7 @@ class Matcher(nn.Module):
 		"TFMLEncMatcher": TFMLEncMatcher,
 	}
 
-	def __init__(self, *args, matching_head=None, **kwargs):
+	def __init__(self, *args, matching_head=None, normalize_matches=True, **kwargs):
 
 		super().__init__()
 
@@ -100,6 +106,13 @@ class Matcher(nn.Module):
 			raise KeyError(f"Invalid Matching module ({matching_head}). Valid values: [{self._MATCHER_DICT.keys()}]")
 
 		self.matcher = self._MATCHER_DICT[matching_head](*args, **kwargs)
+		self.normalize = normalize_matches
 
 	def forward(self, *args, **kwargs):
-		return self.matcher(*args, **kwargs)
+
+		x, matching = self.matcher(*args, **kwargs)
+
+		if self.normalize:
+			matching = normalize_matching(matching)
+
+		return x, matching

@@ -45,10 +45,8 @@ class TFHead(nn.Module):
 
 		self.mod = TFMatchingRegistration(**kwargs)
 
-		self.compute_inverse_tf = kwargs.get("panoptic_weight", 0) > 0 or \
-								  kwargs.get("inv_tf_weight", 0) > 0 or \
-								  kwargs.get("semantic_weight", 0) > 0 or \
-								  kwargs.get("supersem_weight", 0) > 0
+		self.compute_inverse_tf = kwargs.get("panoptic_weight", -1.) > 0. or \
+								  kwargs.get("inv_tf_weight", -1.) > 0.
 
 	def forward(self, batch_dict, *,
 				mode="pairs", **_):

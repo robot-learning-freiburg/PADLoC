@@ -20,7 +20,7 @@ from datasets.KITTI360Dataset import KITTI3603DDictPairs, KITTI3603DPoses
 from datasets.KITTI_RPMNet import KITTIRPM3DDictPairs
 from datasets.KITTI_data_loader import KITTILoader3DPoses, KITTILoader3DDictPairs
 from datasets.NCLTDataset import NCLTDatasetPairs, NCLTDataset, NCLTDatasetTriplets
-from loss import smooth_metric_lossv2, NPair_loss, Circle_Loss, TripletLoss, sinkhorn_matches_loss, pose_loss, \
+from loss import SmoothMetricLossV2, NPairLoss, CircleLoss, TripletLoss, sinkhorn_matches_loss, pose_loss, \
     rpm_loss_for_rpmnet
 from models.RPMNet.rpmnet import RPMNetEarlyFusion
 from models.get_models import get_model

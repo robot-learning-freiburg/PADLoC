@@ -20,7 +20,7 @@ from PIL import Image
 from datasets.KITTI360Dataset import KITTI3603DDictPairs, KITTI3603DPoses
 from datasets.KITTI_data_loader import KITTILoader3DPoses, KITTILoader3DDictPairs
 from datasets.NCLTDataset import NCLTDatasetPairs, NCLTDataset, NCLTDatasetTriplets
-from loss import smooth_metric_lossv2, NPair_loss, Circle_Loss, TripletLoss, sinkhorn_matches_loss, pose_loss
+from loss import SmoothMetricLossV2, NPairLoss, CircleLoss, TripletLoss, sinkhorn_matches_loss, pose_loss
 from models.get_models import get_model
 from epsnet.utils.panoptic import PanopticPreprocessing
 from panoptic.epsnet2.scripts.KNN import KNN
@@ -298,13 +298,13 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                     yaws_out_final = torch.atan2(yaws_out_sin, yaws_out_cos)
                     diff_rot_atan = torch.atan2(diff_rot.sin(), diff_rot.cos())
                     loss_rot = reg_loss(yaws_out_final, diff_rot_atan).mean()
-                elif exp_cfg['rot_representation'] == 'yaw':
+                # elif exp_cfg['rot_representation'] == 'yaw':
                     # diff_rot = (anchor_yaws - positive_yaws) % (2*np.pi)
-                    diff_rot = delta_rot[:, 2] % (2*np.pi)
-                    yaws_out = yaws_out % (2*np.pi)
-                    loss_rot = torch.abs(diff_rot - yaws_out)
-                    loss_rot[loss_rot>np.pi] = 2*np.pi - loss_rot[loss_rot>np.pi]
-                    loss_rot = loss_rot.mean()
+                    # diff_rot = delta_rot[:, 2] % (2*np.pi)
+                    # yaws_out = yaws_out % (2*np.pi)
+                    # loss_rot = torch.abs(diff_rot - yaws_out)
+                    # loss_rot[loss_rot>np.pi] = 2*np.pi - loss_rot[loss_rot>np.pi]
+                    # loss_rot = loss_rot.mean()
                 elif exp_cfg['rot_representation'] .startswith('ce'):
                     yaw_out_bins = yaws_out[:, :-1]
                     yaw_out_delta = yaws_out[:, -1]
@@ -740,12 +740,12 @@ def main_process(local_rank, gpu_per_node, num_nodes, node, common_seed, exp_cfg
                 neg_selector = semihard_negative_selector
             loss_fn = TripletLoss(exp_cfg['margin'], neg_selector, distances.LpDistance())
         elif exp_cfg['loss_type'] == 'lifted':
-            loss_fn = smooth_metric_lossv2(exp_cfg['margin'])
+            loss_fn = SmoothMetricLossV2(exp_cfg['margin'])
         elif exp_cfg['loss_type'] == 'npair':
-            loss_fn = NPair_loss()
+            loss_fn = NPairLoss()
         elif exp_cfg['loss_type'].startswith('circle'):
             version = exp_cfg['loss_type'].split('_')[1]
-            loss_fn = Circle_Loss(version)
+            loss_fn = CircleLoss(version)
         else:
             raise NotImplementedError(f"Loss {exp_cfg['loss_type']} not implemented")
 

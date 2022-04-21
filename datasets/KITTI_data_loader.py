@@ -336,6 +336,7 @@ class KITTILoader3DPoses(Dataset):
             if self.use_panoptic or self.use_semantic:
                 sample.update(unpack_logits(positive_logits, self.use_logits, self.superclass_mapper, "positive"))
                 sample.update(unpack_logits(negative_logits, self.use_logits, self.superclass_mapper, "negative"))
+                sample.update(self.superclass_mapper.one_hot_maps)
 
         return sample
 
@@ -544,6 +545,7 @@ class KITTILoader3DDictPairs(Dataset):
         if self.use_panoptic or self.use_semantic:
             sample.update(anchor_logits_dict)
             sample.update(positive_logits_dict)
+            sample.update(self.superclass_mapper.one_hot_maps)
 
         return sample
 
@@ -723,5 +725,6 @@ class KITTILoader3DDictTriplets(Dataset):
             sample.update(anchor_logits_dict)
             sample.update(positive_logits_dict)
             sample.update(negative_logits_dict)
+            sample.update(self.superclass_mapper.one_hot_maps)
 
         return sample

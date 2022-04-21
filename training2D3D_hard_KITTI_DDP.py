@@ -17,27 +17,22 @@ import torch.nn.functional as F
 from pcdet.datasets.kitti.kitti_dataset import KittiDataset
 import random
 from torch.nn.parallel import DistributedDataParallel
-from torchvision import transforms
 
 from datasets.KITTI360Dataset import KITTI3603DDictPairs, KITTI3603DPoses
 from datasets.KITTI_data_loader import KITTILoader3DPoses, KITTILoader3DDictPairs
 from datasets.NCLTDataset import NCLTDatasetPairs, NCLTDataset, NCLTDatasetTriplets
-from loss import smooth_metric_lossv2, NPair_loss, Circle_Loss, TripletLoss, sinkhorn_matches_loss, pose_loss,\
-    panoptic_mismatch_loss, inverse_tf_loss, rottrace_loss, reverse_pose_loss, reverse_sinkhorn_matches_loss
+from loss import TotalLossFunction
 from models.backbone3D.RandLANet.RandLANet import prepare_randlanet_input
 from models.backbone3D.RandLANet.helper_tool import ConfigSemanticKITTI2
 from models.get_models import get_model
-from triple_selector import hardest_negative_selector, random_negative_selector, \
-    semihard_negative_selector
 from utils.data import datasets_concat_kitti, merge_inputs, datasets_concat_kitti_triplets, datasets_concat_kitti360
 from evaluate_kitti import evaluate_model_with_emb
 from datetime import datetime
 from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointnet2_utils import furthest_point_sample
 from utils.geometry import get_rt_matrix, mat2xyzrpy
-from utils.qcqp_layer import QuadQuatFastSolver
-from utils.rotation_conversion import quaternion_from_matrix, quaternion_atan_loss, quat2mat
+# from utils.qcqp_layer import QuadQuatFastSolver
+from utils.rotation_conversion import quaternion_from_matrix, quat2mat
 from utils.tools import _pairwise_distance, update_bn_swa, SVDNonConvergenceError, NaNLossError
-from pytorch_metric_learning import distances
 
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -92,82 +87,103 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
             for i in range(sample['anchor_pose'].shape[0]):
                 neg_mask[i, i + 2*sample['anchor_pose'].shape[0]] = 1.
 
-        if exp_cfg['training_type'] == "3D":
-            anchor_transl = sample['anchor_pose'].to(device)
-            positive_transl = sample['positive_pose'].to(device)
-            anchor_rot = sample['anchor_rot'].to(device)
-            positive_rot = sample['positive_rot'].to(device)
+        if exp_cfg['training_type'] != "3D":
+            raise NotImplementedError
 
-            anchor_list = []
-            positive_list = []
-            negative_list = []
+        anchor_transl = sample['anchor_pose'].to(device)
+        positive_transl = sample['positive_pose'].to(device)
+        anchor_rot = sample['anchor_rot'].to(device)
+        positive_rot = sample['positive_rot'].to(device)
 
-            delta_transl = []
-            delta_rot = []
-            delta_pose = []
-            delta_quat = []
-            yaw_diff_list = []
-            for i in range(anchor_transl.shape[0]):
-                anchor = sample['anchor'][i].to(device)
-                positive = sample['positive'][i].to(device)
+        anchor_list = []
+        positive_list = []
+        negative_list = []
+
+        delta_transl = []
+        delta_rot = []
+        delta_pose = []
+        delta_quat = []
+        yaw_diff_list = []
+        for i in range(anchor_transl.shape[0]):
+            anchor = sample['anchor'][i].to(device)
+            positive = sample['positive'][i].to(device)
+            if mode == 'triplets':
+                negative = sample['negative'][i].to(device)
+
+            if exp_cfg['3D_net'] != 'PVRCNN':
+                anchor_set = furthest_point_sample(anchor[:, 0:3].unsqueeze(0).contiguous(), exp_cfg['num_points'])
+                positive_set = furthest_point_sample(positive[:, 0:3].unsqueeze(0).contiguous(), exp_cfg['num_points'])
+                a = anchor_set[0, :].long()
+                p = positive_set[0, :].long()
+                anchor_i = anchor[a].clone()
+                positive_i = positive[p].clone()
+                del anchor, positive
                 if mode == 'triplets':
-                    negative = sample['negative'][i].to(device)
-
-                if exp_cfg['3D_net'] != 'PVRCNN':
-                    anchor_set = furthest_point_sample(anchor[:, 0:3].unsqueeze(0).contiguous(), exp_cfg['num_points'])
-                    positive_set = furthest_point_sample(positive[:, 0:3].unsqueeze(0).contiguous(), exp_cfg['num_points'])
-                    a = anchor_set[0, :].long()
-                    p = positive_set[0, :].long()
-                    anchor_i = anchor[a].clone()
-                    positive_i = positive[p].clone()
-                    del anchor, positive
-                    if mode == 'triplets':
-                        negative_set = furthest_point_sample(negative[:, 0:3].unsqueeze(0).contiguous(), exp_cfg['num_points'])
-                        n = negative_set[0, :].long()
-                        negative_i = negative[n].clone()
-                        del negative
-                else:
-                    anchor_i = anchor
-                    positive_i = positive
-                    if mode == 'triplets':
-                        negative_i = negative
-                # n = negative_set[i, :].long()
-                anchor_transl_i = anchor_transl[i]  # Aggiunta
-                anchor_rot_i = anchor_rot[i]  # Aggiunta
-                positive_transl_i = positive_transl[i]  # Aggiunta
-                positive_rot_i = positive_rot[i]  # Aggiunta
-
-                anchor_i_reflectance = anchor_i[:, 3].clone()
-                positive_i_reflectance = positive_i[:, 3].clone()
-                anchor_i[:, 3] = 1.
-                positive_i[:, 3] = 1.
+                    negative_set = furthest_point_sample(negative[:, 0:3].unsqueeze(0).contiguous(), exp_cfg['num_points'])
+                    n = negative_set[0, :].long()
+                    negative_i = negative[n].clone()
+                    del negative
+            else:
+                anchor_i = anchor
+                positive_i = positive
                 if mode == 'triplets':
-                    negative_i_reflectance = negative_i[:, 3].clone()
-                    negative_i[:, 3] = 1.
+                    negative_i = negative
+            # n = negative_set[i, :].long()
+            anchor_transl_i = anchor_transl[i]  # Aggiunta
+            anchor_rot_i = anchor_rot[i]  # Aggiunta
+            positive_transl_i = positive_transl[i]  # Aggiunta
+            positive_rot_i = positive_rot[i]  # Aggiunta
 
-                # anchor_test = anchor_i.detach().clone()  # Test
-                # positive_test = positive_i.detach().clone()  # Test
+            anchor_i_reflectance = anchor_i[:, 3].clone()
+            positive_i_reflectance = positive_i[:, 3].clone()
+            anchor_i[:, 3] = 1.
+            positive_i[:, 3] = 1.
+            if mode == 'triplets':
+                negative_i_reflectance = negative_i[:, 3].clone()
+                negative_i[:, 3] = 1.
 
-                rt_anchor = get_rt_matrix(anchor_transl_i, anchor_rot_i, rot_parmas='xyz')
-                rt_positive = get_rt_matrix(positive_transl_i, positive_rot_i, rot_parmas='xyz')
+            # anchor_test = anchor_i.detach().clone()  # Test
+            # positive_test = positive_i.detach().clone()  # Test
 
-                if exp_cfg['point_cloud_augmentation']:
+            rt_anchor = get_rt_matrix(anchor_transl_i, anchor_rot_i, rot_parmas='xyz')
+            rt_positive = get_rt_matrix(positive_transl_i, positive_rot_i, rot_parmas='xyz')
 
-                    rotz = np.random.rand() * 360 - 180
-                    rotz = rotz * (np.pi / 180.0)
+            if exp_cfg['point_cloud_augmentation']:
 
-                    roty = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
-                    rotx = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
+                rotz = np.random.rand() * 360 - 180
+                rotz = rotz * (np.pi / 180.0)
 
-                    T = torch.rand(3)*3. - 1.5
-                    T[-1] = torch.rand(1)*0.5 - 0.25
-                    T = T.to(device)
+                roty = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
+                rotx = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
 
-                    rt_anch_augm = get_rt_matrix(T, torch.tensor([rotx, roty, rotz]).to(device))
-                    anchor_i = rt_anch_augm.inverse() @ anchor_i.T
-                    anchor_i = anchor_i.T
-                    anchor_i[:, 3] = anchor_i_reflectance.clone()
+                T = torch.rand(3)*3. - 1.5
+                T[-1] = torch.rand(1)*0.5 - 0.25
+                T = T.to(device)
 
+                rt_anch_augm = get_rt_matrix(T, torch.tensor([rotx, roty, rotz]).to(device))
+                anchor_i = rt_anch_augm.inverse() @ anchor_i.T
+                anchor_i = anchor_i.T
+                anchor_i[:, 3] = anchor_i_reflectance.clone()
+
+                rotz = np.random.rand() * 360 - 180
+                rotz = rotz * (3.141592 / 180.0)
+
+                roty = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
+                rotx = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
+
+                T = torch.rand(3)*3.-1.5
+                T[-1] = torch.rand(1)*0.5 - 0.25
+                T = T.to(device)
+
+                rt_pos_augm = get_rt_matrix(T, torch.tensor([rotx, roty, rotz]).to(device))
+                positive_i = rt_pos_augm.inverse() @ positive_i.T
+                positive_i = positive_i.T
+                positive_i[:, 3] = positive_i_reflectance.clone()
+
+                rt_anch_concat = rt_anchor @ rt_anch_augm
+                rt_pos_concat = rt_positive @ rt_pos_augm
+
+                if mode == 'triplets':
                     rotz = np.random.rand() * 360 - 180
                     rotz = rotz * (3.141592 / 180.0)
 
@@ -177,269 +193,96 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                     T = torch.rand(3)*3.-1.5
                     T[-1] = torch.rand(1)*0.5 - 0.25
                     T = T.to(device)
+                    rt_neg_augm = get_rt_matrix(T, torch.tensor([rotx, roty, rotz]).to(device))
+                    negative_i = rt_neg_augm.inverse() @ negative_i.T
+                    negative_i = negative_i.T
+                    negative_i[:, 3] = negative_i_reflectance.clone()
 
-                    rt_pos_augm = get_rt_matrix(T, torch.tensor([rotx, roty, rotz]).to(device))
-                    positive_i = rt_pos_augm.inverse() @ positive_i.T
-                    positive_i = positive_i.T
-                    positive_i[:, 3] = positive_i_reflectance.clone()
+                rt_anchor2positive = rt_anch_concat.inverse() @ rt_pos_concat
+                ext = mat2xyzrpy(rt_anchor2positive)
+                delta_transl_i = ext[0:3]
+                delta_rot_i = ext[3:]
 
-                    rt_anch_concat = rt_anchor @ rt_anch_augm
-                    rt_pos_concat = rt_positive @ rt_pos_augm
-
-                    if mode == 'triplets':
-                        rotz = np.random.rand() * 360 - 180
-                        rotz = rotz * (3.141592 / 180.0)
-
-                        roty = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
-                        rotx = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
-
-                        T = torch.rand(3)*3.-1.5
-                        T[-1] = torch.rand(1)*0.5 - 0.25
-                        T = T.to(device)
-                        rt_neg_augm = get_rt_matrix(T, torch.tensor([rotx, roty, rotz]).to(device))
-                        negative_i = rt_neg_augm.inverse() @ negative_i.T
-                        negative_i = negative_i.T
-                        negative_i[:, 3] = negative_i_reflectance.clone()
-
-                    rt_anchor2positive = rt_anch_concat.inverse() @ rt_pos_concat
-                    ext = mat2xyzrpy(rt_anchor2positive)
-                    delta_transl_i = ext[0:3]
-                    delta_rot_i = ext[3:]
-
-                else:
-                    raise NotImplementedError()
+            else:
+                raise NotImplementedError()
 
 
-                # negative_i = negative[i, n, 0:3].unsqueeze(0)
-                if exp_cfg['3D_net'] != 'PVRCNN':
-                    anchor_list.append(anchor_i[:, :3].unsqueeze(0))
-                    positive_list.append(positive_i[:, :3].unsqueeze(0))
-                    if mode == 'triplets':
-                        negative_list.append(negative_i[:, :3].unsqueeze(0))
-                else:
-                    if exp_cfg['use_semantic'] or exp_cfg['use_panoptic']:
-                        anchor_i = torch.cat((anchor_i, sample['anchor_logits'][i].to(device)), dim=1)
-                        positive_i = torch.cat((positive_i, sample['positive_logits'][i].to(device)), dim=1)
-                    anchor_list.append(model.module.backbone.prepare_input(anchor_i))
-                    positive_list.append(model.module.backbone.prepare_input(positive_i))
-                    del anchor_i, positive_i
-                    if mode == 'triplets':
-                        if exp_cfg['use_semantic'] or exp_cfg['use_panoptic']:
-                            negative_i = torch.cat((negative_i, sample['negative_logits'][i].to(device)), dim=1)
-                        negative_list.append(model.module.backbone.prepare_input(negative_i))
-                        del negative_i
-                delta_transl.append(delta_transl_i.unsqueeze(0))
-                delta_rot.append(delta_rot_i.unsqueeze(0))
-                delta_pose.append(rt_anchor2positive.unsqueeze(0))
-                delta_quat.append(quaternion_from_matrix(rt_anchor2positive).unsqueeze(0))
-
-            delta_transl = torch.cat(delta_transl)
-            delta_rot = torch.cat(delta_rot)
-            delta_pose = torch.cat(delta_pose)
-            delta_quat = torch.cat(delta_quat)
-
+            # negative_i = negative[i, n, 0:3].unsqueeze(0)
             if exp_cfg['3D_net'] != 'PVRCNN':
-                anchor = torch.cat(anchor_list)
-                positive = torch.cat(positive_list)
-                model_in = torch.cat((anchor, positive))
+                anchor_list.append(anchor_i[:, :3].unsqueeze(0))
+                positive_list.append(positive_i[:, :3].unsqueeze(0))
                 if mode == 'triplets':
-                    negative = torch.cat(negative_list)
-                    model_in = torch.cat((anchor, positive, negative))
-                if exp_cfg['3D_net'] == 'RandLANet':
-                    model_in = prepare_randlanet_input(ConfigSemanticKITTI2(), model_in.cpu(), device)
-                # Normalize between [-1, 1], more or less
-                # model_in = model_in / 100.
+                    negative_list.append(negative_i[:, :3].unsqueeze(0))
             else:
-                if mode == 'pairs':
-                    model_in = KittiDataset.collate_batch(anchor_list + positive_list)
-                elif mode == 'triplets':
-                    model_in = KittiDataset.collate_batch(anchor_list + positive_list + negative_list)
-                for key, val in model_in.items():
-                    if not isinstance(val, np.ndarray):
-                        continue
-                    model_in[key] = torch.from_numpy(val).float().to(device)
+                if exp_cfg['use_semantic'] or exp_cfg['use_panoptic']:
+                    anchor_i = torch.cat((anchor_i, sample['anchor_logits'][i].to(device)), dim=1)
+                    positive_i = torch.cat((positive_i, sample['positive_logits'][i].to(device)), dim=1)
+                anchor_list.append(model.module.backbone.prepare_input(anchor_i))
+                positive_list.append(model.module.backbone.prepare_input(positive_i))
+                del anchor_i, positive_i
+                if mode == 'triplets':
+                    if exp_cfg['use_semantic'] or exp_cfg['use_panoptic']:
+                        negative_i = torch.cat((negative_i, sample['negative_logits'][i].to(device)), dim=1)
+                    negative_list.append(model.module.backbone.prepare_input(negative_i))
+                    del negative_i
+            delta_transl.append(delta_transl_i.unsqueeze(0))
+            delta_rot.append(delta_rot_i.unsqueeze(0))
+            delta_pose.append(rt_anchor2positive.unsqueeze(0))
+            delta_quat.append(quaternion_from_matrix(rt_anchor2positive).unsqueeze(0))
 
-            metric_head = True
-            compute_embeddings = True
-            compute_transl = True
-            compute_rotation = True
+        delta_transl = torch.cat(delta_transl)
+        delta_rot = torch.cat(delta_rot)
+        delta_pose = torch.cat(delta_pose)
+        delta_quat = torch.cat(delta_quat)
 
-            move_from_sample_to_model_in(exp_cfg, sample, model_in)
-
-            if exp_cfg['weight_transl'] == 0 and exp_cfg['weight_rot'] == 0:
-                metric_head = False
-            if exp_cfg['weight_transl'] == 0:
-                compute_transl = False
-            if exp_cfg['weight_rot'] == 0:
-                compute_rotation = False
-            if exp_cfg['weight_metric_learning'] == 0:
-                compute_embeddings = False
-
-            batch_dict = model(model_in, metric_head, compute_embeddings,
-                               compute_transl, compute_rotation, mode=mode)
-
-            model_out = batch_dict['out_embedding']
-            transl_out = batch_dict['out_translation']
-            yaws_out = batch_dict['out_rotation']
-
-            # Translation loss
-            transl_diff = delta_transl
-            total_loss = 0.
-
-            other_loss_dict = {}  # Dictionary used for logging additional losses
-
-            reg_loss = torch.nn.SmoothL1Loss(reduction='none')
-            # reg_loss = torch.nn.MSELoss(reduction='none')
-            if exp_cfg['weight_transl'] > 0. and exp_cfg['rot_representation'] != '6dof':
-                # loss_transl = L1loss(transl_diff, transl_out).sum(1).mean() * exp_cfg['weight_transl']
-                loss_transl = reg_loss(transl_out, transl_diff).sum(1).mean() * exp_cfg['weight_transl']
-                total_loss = total_loss + loss_transl
-            else:
-                loss_transl = torch.tensor([0.], device=device)
-
-            if exp_cfg['weight_rot'] > 0.:
-                rot_loss_weight2 = 1
-                if exp_cfg['head'] in ["SuperGlue", "Transformer", "PyTransformer", "TFHead", "MLFeatTF"] \
-                        and exp_cfg['sinkhorn_aux_loss']:
-                    aux_loss = sinkhorn_matches_loss(batch_dict, delta_pose, mode=mode)
-                    if torch.any(torch.isnan(aux_loss)):
-                        raise NaNLossError("Sinkhorn Aux Loss has NAN")
-                    other_loss_dict["Loss: Sinkhorn Aux"] = aux_loss
-
-                    if exp_cfg["inv_tf_weight"] > 0:
-                        rev_aux_loss = reverse_sinkhorn_matches_loss(batch_dict, delta_pose, mode=mode)
-                        if torch.any(torch.isnan(rev_aux_loss)):
-                            raise NaNLossError("Reverse Sinkhorn Aux Loss has NAN.")
-                        other_loss_dict["Loss: Reverse Sinkhorn Aux"] = rev_aux_loss
-                        aux_loss += rev_aux_loss
-                        aux_loss /= 2
-                else:
-                    aux_loss = torch.tensor([0.], device=device)
-                if exp_cfg['rot_representation'] == 'sincos':
-                    # diff_rot = (anchor_yaws - positive_yaws)
-                    diff_rot = delta_rot[:, 2]
-                    diff_rot_cos = torch.cos(diff_rot)
-                    diff_rot_sin = torch.sin(diff_rot)
-                    yaws_out_cos = yaws_out[:, 0]
-                    yaws_out_sin = yaws_out[:, 1]
-                    loss_rot = reg_loss(yaws_out_sin, diff_rot_sin).mean()
-                    loss_rot = loss_rot + reg_loss(yaws_out_cos, diff_rot_cos).mean()
-                elif exp_cfg['rot_representation'] == 'sincos_atan':
-                    # diff_rot = (anchor_yaws - positive_yaws)
-                    diff_rot = delta_rot[:, 2]
-                    yaws_out_cos = yaws_out[:, 0]
-                    yaws_out_sin = yaws_out[:, 1]
-                    yaws_out_final = torch.atan2(yaws_out_sin, yaws_out_cos)
-                    diff_rot_atan = torch.atan2(diff_rot.sin(), diff_rot.cos())
-                    loss_rot = reg_loss(yaws_out_final, diff_rot_atan).mean()
-                elif exp_cfg['rot_representation'] == 'yaw':
-                    # diff_rot = (anchor_yaws - positive_yaws) % (2*np.pi)
-                    diff_rot = delta_rot[:, 2] % (2*np.pi)
-                    yaws_out = yaws_out % (2*np.pi)
-                    loss_rot = torch.abs(diff_rot - yaws_out)
-                    loss_rot[loss_rot>np.pi] = 2*np.pi - loss_rot[loss_rot>np.pi]
-                    loss_rot = loss_rot.mean()
-                elif exp_cfg['rot_representation'] .startswith('ce'):
-                    yaw_out_bins = yaws_out[:, :-1]
-                    yaw_out_delta = yaws_out[:, -1]
-                    token = exp_cfg['rot_representation'].split('_')
-                    num_classes = int(token[1])
-                    bin_size = 2*np.pi / num_classes
-                    # diff_rot = (anchor_yaws - positive_yaws) % (2*np.pi)
-                    diff_rot = delta_rot[:, 2] % (2*np.pi)
-                    gt_bins = torch.zeros(diff_rot.shape[0], dtype=torch.long, device=device)
-                    for i in range(num_classes):
-                        lower_bound = i * bin_size
-                        upper_bound = (i+1) * bin_size
-                        indexes = (diff_rot >= lower_bound) & (diff_rot < upper_bound)
-                        gt_bins[indexes] = i
-                    gt_delta = diff_rot - bin_size*gt_bins
-
-                    loss_rot_fn = torch.nn.CrossEntropyLoss()
-                    loss_rot = loss_rot_fn(yaw_out_bins, gt_bins) + reg_loss(yaw_out_delta, gt_delta).mean()
-                elif exp_cfg['rot_representation'] == 'quat':
-                    yaws_out = F.normalize(yaws_out, dim=1)
-                    loss_rot = quaternion_atan_loss(yaws_out, delta_quat).mean()
-                elif exp_cfg['rot_representation'] == 'bingham':
-                    to_quat = QuadQuatFastSolver()
-                    quat_out = to_quat.apply(yaws_out)
-                    loss_rot = quaternion_atan_loss(quat_out, delta_quat[:, [3,0,1,2]]).mean()
-                elif exp_cfg['rot_representation'] == '6dof':
-                    pose_loss_fn = exp_cfg.get("pose_loss_fn") or "proj_point"
-                    if pose_loss_fn == "rotrace":
-                        tra_weight = exp_cfg.get("weight_transl", 1)
-                        loss_rot, loss_rot_deg, loss_transl = rottrace_loss(batch_dict, delta_pose)
-                        other_loss_dict["Loss: Rotation (Degrees) [Not used for BackProp]"] = loss_rot_deg
-                        loss_rot = loss_rot + (tra_weight / exp_cfg['weight_rot']) * loss_transl
-                    else:
-                        loss_rot = pose_loss(batch_dict, delta_pose, mode=mode)
-                        if exp_cfg["inv_tf_weight"] > 0:
-                            rev_loss_rot = reverse_pose_loss(batch_dict, delta_pose, mode=mode)
-                        if torch.any(torch.isnan(rev_loss_rot)):
-                            raise NaNLossError("Reverse Rot Loss has NAN.")
-                        other_loss_dict["Loss: Reverse Rot"] = rev_loss_rot
-                        rot_loss_weight2 = 0.5
-                        total_loss += exp_cfg["weight_rot"] * rot_loss_weight2 * rev_loss_rot
-                    if torch.any(torch.isnan(loss_rot)):
-                        raise NaNLossError("Rot Loss has NAN")
-                    if exp_cfg['head'] == "SuperGlue" and exp_cfg['sinkhorn_type'] == 'slack':
-                        inlier_loss = (1 - batch_dict['transport'].sum(dim=1)).mean()
-                        inlier_loss += (1 - batch_dict['transport'].sum(dim=2)).mean()
-                        if torch.any(torch.isnan(inlier_loss)):
-                            raise NaNLossError("Sinkhorn Inlier Loss has NAN")
-                        other_loss_dict["Loss: Inlier"] = inlier_loss
-                        loss_rot += 0.01 * inlier_loss
-
-                total_loss = total_loss + exp_cfg['weight_rot']*((rot_loss_weight2 * loss_rot) + 0.05*aux_loss)
-            else:
-                loss_rot = torch.tensor([0.], device=device)
-
-            if exp_cfg['panoptic_weight'] > 0:
-                loss_panoptic = panoptic_mismatch_loss(batch_dict)
-                if torch.any(torch.isnan(loss_panoptic)):
-                    raise NaNLossError("Panoptic Mismatch Loss has NaN.")
-                other_loss_dict["Loss: Panoptic Mismatch"] = loss_panoptic
-                total_loss = total_loss + exp_cfg['panoptic_weight'] * loss_panoptic
-
-            if exp_cfg["semantic_weight"] > 0:
-                pass # TODO
-
-            if exp_cfg["supersem_weight"] > 0:
-                pass  # TODO
-
-            # Using instead the reverse_pose_loss() and reverse_sinkhorn_matches_loss()
-            # if exp_cfg['inv_tf_weight'] > 0 and exp_cfg['head'] == "Transformer":
-            #     loss_inv_tf = inverse_tf_loss(batch_dict)
-            #     if torch.any(torch.isnan(loss_inv_tf)):
-            #         raise NaNLossError("Inverse Transform Loss has NaN.")
-            #     other_loss_dict["Loss: Inverse Transform"] = loss_inv_tf
-            #     total_loss = total_loss + exp_cfg['inv_tf_weight'] * loss_inv_tf
-
-            if exp_cfg['weight_metric_learning'] > 0.:
-                if exp_cfg['norm_embeddings']:
-                    model_out = model_out / model_out.norm(dim=1, keepdim=True)
-
-                pos_mask = torch.zeros((model_out.shape[0], model_out.shape[0]), device=device)
-                if mode == 'pairs':
-                    batch_size = (model_out.shape[0]//2)
-                    for i in range(batch_size):
-                        pos_mask[i, i+batch_size] = 1
-                        pos_mask[i+batch_size, i] = 1
-                elif mode == 'triplets':
-                    batch_size = (model_out.shape[0]//3)
-                    for i in range(batch_size):
-                        pos_mask[i, i+batch_size] = 1
-
-                loss_metric_learning = loss_fn(model_out, pos_mask, neg_mask) * exp_cfg['weight_metric_learning']
-                if torch.any(torch.isnan(loss_metric_learning)):
-                    raise NaNLossError("Loss Metric Learning has NAN")
-                other_loss_dict['Loss: Metric Learning'] = loss_metric_learning
-                total_loss = total_loss + loss_metric_learning
-            else:
-                loss_metric_learning = torch.tensor([0.], device=device)
-
+        if exp_cfg['3D_net'] != 'PVRCNN':
+            anchor = torch.cat(anchor_list)
+            positive = torch.cat(positive_list)
+            model_in = torch.cat((anchor, positive))
+            if mode == 'triplets':
+                negative = torch.cat(negative_list)
+                model_in = torch.cat((anchor, positive, negative))
+            if exp_cfg['3D_net'] == 'RandLANet':
+                model_in = prepare_randlanet_input(ConfigSemanticKITTI2(), model_in.cpu(), device)
+            # Normalize between [-1, 1], more or less
+            # model_in = model_in / 100.
         else:
-            raise NotImplementedError("Not Implemented")
+            if mode == 'pairs':
+                model_in = KittiDataset.collate_batch(anchor_list + positive_list)
+            elif mode == 'triplets':
+                model_in = KittiDataset.collate_batch(anchor_list + positive_list + negative_list)
+            for key, val in model_in.items():
+                if not isinstance(val, np.ndarray):
+                    continue
+                model_in[key] = torch.from_numpy(val).float().to(device)
+
+        move_from_sample_to_model_in(exp_cfg, sample, model_in)
+
+        metric_head = exp_cfg['weight_transl'] != 0 or exp_cfg['weight_rot'] != 0
+        compute_transl = not exp_cfg['weight_transl'] == 0
+        compute_rotation = exp_cfg['weight_rot'] != 0
+        compute_embeddings = exp_cfg['weight_metric_learning'] != 0
+
+        batch_dict = model(model_in, metric_head, compute_embeddings,
+                           compute_transl, compute_rotation, mode=mode)
+
+        # Add the stuff that is missing in the batch dict for the Loss function
+        batch_dict["neg_mask"] = neg_mask
+        batch_dict["delta_transl"] = delta_transl
+        batch_dict["delta_rot"] = delta_rot
+        batch_dict["delta_quat"] = delta_quat
+        batch_dict["delta_pose"] = delta_pose
+        if exp_cfg["load_semantic"] or exp_cfg["load_panoptic"]:
+            batch_dict["class_one_hot_map"] = sample["class_one_hot_map"]
+            batch_dict["superclass_one_hot_map"] = sample["superclass_one_hot_map"]
+
+        loss_dict = loss_fn(batch_dict)
+        total_loss = loss_dict["total"]
+        loss_rot = loss_dict["aux"].pop("Loss: Rotation") if "Loss: Rotation" in loss_dict["aux"] \
+            else torch.tensor([0.], device=device)
+        loss_transl = loss_dict["aux"].pop("Loss: Translation") if "Loss: Translation" in loss_dict["aux"] \
+            else torch.tensor([0.], device=device)
+        aux_losses = loss_dict["aux"]
 
         if torch.any(torch.isnan(total_loss)):
             raise NaNLossError("Total Loss has NAN")
@@ -450,7 +293,7 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
             raise NotImplementedError("TZMGrad not implemented in DDP")
         optimizer.step()
 
-        return total_loss, loss_rot, loss_transl, other_loss_dict
+        return total_loss, loss_rot, loss_transl, aux_losses
 
 
 def test(model, sample, exp_cfg, device):
@@ -847,22 +690,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         shuffle=False
     )
 
-    if exp_cfg['loss_type'].startswith('triplet'):
-        neg_selector = random_negative_selector
-        if 'hardest' in exp_cfg['loss_type']:
-            neg_selector = hardest_negative_selector
-        if 'semihard' in exp_cfg['loss_type']:
-            neg_selector = semihard_negative_selector
-        loss_fn = TripletLoss(exp_cfg['margin'], neg_selector, distances.LpDistance())
-    elif exp_cfg['loss_type'] == 'lifted':
-        loss_fn = smooth_metric_lossv2(exp_cfg['margin'])
-    elif exp_cfg['loss_type'] == 'npair':
-        loss_fn = NPair_loss()
-    elif exp_cfg['loss_type'].startswith('circle'):
-        version = exp_cfg['loss_type'].split('_')[1]
-        loss_fn = Circle_Loss(version)
-    else:
-        raise NotImplementedError(f"Loss {exp_cfg['loss_type']} not implemented")
+    loss_fn = TotalLossFunction(exp_cfg)
 
     positive_distance = 5.
     negative_distance = 25.

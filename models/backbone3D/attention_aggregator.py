@@ -62,4 +62,6 @@ class AttentionAggregator:
 		if not isinstance(attn_matrices, list):
 			attn_matrices = [attn_matrices]
 
-		return self._agg_function(attn_matrices)
+		agg_attn = self._agg_function(attn_matrices)
+
+		return agg_attn
