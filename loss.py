@@ -6,13 +6,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, List, Dict, Callable
 
-from models.backbone3D.functional import soft_kronecker
+from models.backbone3D.functional import hard_kronecker
 from models.backbone3D.matchers import normalize_matching
 from triple_selector import hardest_negative_selector, random_negative_selector, \
     semihard_negative_selector
 from utils.qcqp_layer import QuadQuatFastSolver
 from utils.rotation_conversion import quaternion_atan_loss
 from utils.tools import NaNLossError
+
+
+_REVERSE_L_SUFFIX = "(Reverse)"
 
 
 # TODO: Documentation!!!
@@ -73,8 +76,8 @@ def loss_sinkhorn_matches(batch_dict, *, mode, reverse_loss=False, **_):
     if reverse_loss:
         sinkhorn_matches2 = batch_dict["sinkhorn_matches2"]
         pos_coords = _get_point_hcoords(batch_dict, point_set="pos", mode=mode)
-        loss_dict["(Reverse)"] = _loss_sinkhorn_matches(sinkhorn_matches=sinkhorn_matches2, src_coords=pos_coords,
-                                                        delta_pose_inv=delta_pose)
+        loss_dict[_REVERSE_L_SUFFIX] = _loss_sinkhorn_matches(sinkhorn_matches=sinkhorn_matches2, src_coords=pos_coords,
+                                                              delta_pose_inv=delta_pose)
 
     return loss_dict
 
@@ -104,8 +107,8 @@ def loss_pose(batch_dict, *, mode, reverse_loss=False, **_):
         transformation2 = batch_dict["transformation2"]
         # Coordinates should be the same as in the non-reverse loss,
         # since we are only using them to compare the predicted and true transformations
-        loss_dict["(Reverse)"] = _loss_pose(transformation=transformation2, src_coords=anc_coords,
-                                            delta_pose_inv=delta_pose)
+        loss_dict[_REVERSE_L_SUFFIX] = _loss_pose(transformation=transformation2, src_coords=anc_coords,
+                                                  delta_pose_inv=delta_pose)
 
     return loss_dict
 
@@ -154,9 +157,20 @@ def _remap_label(value, mapping_dict: Optional[Dict[int, int]] = None):
     return remapped_value
 
 
-def _loss_label(*, match_p2a, sem1, sem2):
-    pred_sem1 = torch.bmm(match_p2a, sem2)
-    err_mat = sem1 - pred_sem1
+def _loss_miss_classification(*, match_p2a, labels1, labels2_one_hot, cce=True):
+    pred_labels1_one_hot = torch.bmm(match_p2a, labels2_one_hot)
+
+    # Categorical Cross-Entropy loss between the one-hot encoded predicted tensor and the true indices
+    if cce:
+        masked_pred_labels_1 = pred_labels1_one_hot[labels1]  # Only select the entry for the true label
+        masked_pred_labels_1 = 1e-8 + masked_pred_labels_1  # To avoid getting NANs if the prediction is 0
+        masked_pred_labels_1 = masked_pred_labels_1.clamp(0., 1.)  # To avoid having values larger than 1
+        loss = - torch.log(masked_pred_labels_1)  # CCE Loss
+        loss = loss.mean()
+        return loss
+
+    # Mean Square Error between the predicted and true one-hot encoded tensors
+    err_mat = labels1 - pred_labels1_one_hot
     err_vec = err_mat.square().sum(-1)
     loss = err_vec.mean()
     return loss
@@ -171,39 +185,53 @@ def _loss_meta_semantic(batch_dict, *, meta, reverse_loss=False, **_):
         lbl_suffix = "supersem"
         map_key_prefix = "superclass"
 
-    lbl1 = batch_dict["anchor_" + lbl_suffix]
-    lbl2 = batch_dict["positive_" + lbl_suffix]
+    b = match_p2a.shape[0]  # Batch size
 
-    b = match_p2a.shape[0]
+    # Original labels for All points in each point cloud
+    lbl1_orig_all_points = batch_dict["anchor_" + lbl_suffix]
+    lbl2_orig_all_points = batch_dict["positive_" + lbl_suffix]
 
-    # Extract the semantic labels of the sampled points
-    keypoint_idx = batch_dict['keypoint_idxs']
-    lbl1_sampled = [s[i] for s, i in zip(lbl1, keypoint_idx[:b])]
-    lbl2_sampled = [s[i] for s, i in zip(lbl2, keypoint_idx[b:2*b])]
+    # Extract the original labels of only the sampled points
+    keypoint_idx = batch_dict['keypoint_idxs']  # Indices of the sampled points
+    lbl1_sampled = [s[i] for s, i in zip(lbl1_orig_all_points, keypoint_idx[:b])]
+    lbl2_sampled = [s[i] for s, i in zip(lbl2_orig_all_points, keypoint_idx[b:2*b])]
 
     # Remap labels from sparse to contiguous so that the one-hot encoding doesn't have unnecessary columns
     oh_mapping = batch_dict[map_key_prefix + "_one_hot_map"]
     lbl1_remap = [_remap_label(t, m) for t, m in zip(lbl1_sampled, oh_mapping)]
     lbl2_remap = [_remap_label(t, m) for t, m in zip(lbl2_sampled, oh_mapping)]
-    lbl1_remap = torch.stack(lbl1_remap).view(b, -1).to(torch.int64)  # Cast as int64, otherwise one_hot gives an error
-    lbl2_remap = torch.stack(lbl2_remap).view(b, -1).to(torch.int64)
+    # Turn list of label index tensors into single tensor by stacking them
+    lbl1_remap = torch.stack(lbl1_remap).view(b, -1)
+    lbl2_remap = torch.stack(lbl2_remap).view(b, -1)
+    # Cast as int64, otherwise one_hot gives an error
+    lbl1_remap = lbl1_remap.to(torch.int64)
+    lbl2_remap = lbl2_remap.to(torch.int64)
+    # Detach to prevent gradient from flowing through here, since both are Ground Truth
+    lbl1_remap = lbl1_remap.detach()
+    lbl2_remap = lbl2_remap.detach()
 
     # Encode labels as one-hot
-    n_classes = max([max(mapping.values()) for mapping in oh_mapping]) + 1
-    lbl1_oh = F.one_hot(lbl1_remap, n_classes).to(torch.float32)  # Recast as floats, otherwise BMM in loss complains :S
-    lbl2_oh = F.one_hot(lbl2_remap, n_classes).to(torch.float32)
-
-    # Disable the gradient since they are the Ground Truth, just in case
-    lbl1_oh.requires_grad(False)
-    lbl2_oh.requires_grad(False)
+    n_classes = max([max(mapping.values()) for mapping in oh_mapping]) + 1  # Number of different labels
+    lbl2_oh = F.one_hot(lbl2_remap, n_classes)
+    # Recast as floats, otherwise BMM in loss complains :S
+    lbl2_oh = lbl2_oh.to(torch.float32)
+    # Detach to get rid of any gradient, since it is the ground truth
+    lbl2_oh = lbl2_oh.detach()
 
     loss_dict = {
-        "": _loss_label(match_p2a=match_p2a, sem1=lbl1_oh, sem2=lbl2_oh)
+        # "": _loss_miss_classification(match_p2a=match_p2a, labels1=lbl1_oh, labels2_one_hot=lbl2_oh, cce=False) # MSE
+        "": _loss_miss_classification(match_p2a=match_p2a, labels1=lbl1_remap, labels2_one_hot=lbl2_oh, cce=True)
     }
 
     if reverse_loss:
         match_a2p = _get_normalized_matching(batch_dict, pos2anc=False)
-        loss_dict["(Reverse)"] = _loss_label(match_p2a=match_a2p, sem1=lbl2_oh, sem2=lbl1_oh)
+        lbl1_oh = F.one_hot(lbl1_remap, n_classes)
+        lbl1_oh = lbl1_oh.to(torch.float32)
+        lbl1_oh = lbl1_oh.detach()
+        # loss_dict[_REVERSE_L_SUFFIX] = _loss_miss_classification(match_p2a=match_a2p,
+        #                                                    labels1=lbl2_oh, labels2_one_hot=lbl1_oh, cce=False) # MSE
+        loss_dict[_REVERSE_L_SUFFIX] = _loss_miss_classification(match_p2a=match_a2p,
+                                                                 labels1=lbl2_remap, labels2_one_hot=lbl1_oh, cce=True)
 
     return loss_dict
 
@@ -225,7 +253,9 @@ def _loss_panoptic(*, match_a2p, match_p2a, obj1, obj2):
     # loss = masked_err.square() # Don't square them, it makes them tiny
     loss = masked_err.abs()  # to get bigger values and more resolution
     # loss = loss.sum([1, 2]) # Don't sum them per matrix, otherwise huge values (~400'000) that depend on points_num
-    loss = loss.mean()
+    # loss = loss.mean()  # Don't average of all values, there are a ton of zeros in the matrix, lowering the mean
+    loss = loss[loss != 0.].mean([1, 2])  # mean over the matrices, since each matrix will have diff. no. of non-zeros
+    loss = loss.mean()  # mean over the batches, since each matrix mean will have different denominators
     return loss
 
 
@@ -242,19 +272,19 @@ def loss_panoptic(batch_dict, *, reverse_loss=False, **_):
     panoptic_2 = torch.stack([s[i] for s, i in zip(batch_dict['positive_panoptic'], keypoint_idx[b:2*b])]).view(b, -1)
 
     # Build the object connectivity graph matrices
-    obj1 = soft_kronecker(panoptic_1)
-    obj2 = soft_kronecker(panoptic_2)
+    obj1 = hard_kronecker(panoptic_1)
+    obj2 = hard_kronecker(panoptic_2)
 
-    # Disable the gradient since they are the Ground Truth, just in case (Didn't work)
-    # obj1.requires_grad(False)
-    # obj2.requires_grad(False)
+    # Disable the gradient since they are the Ground Truth, just in case
+    obj1 = obj1.detach()
+    obj2 = obj2.detach()
 
     loss_dict = {
         "": _loss_panoptic(match_a2p=match_a2p, match_p2a=match_p2a, obj1=obj1, obj2=obj2)
     }
 
     if reverse_loss:
-        loss_dict["(Reverse)"] = _loss_panoptic(match_a2p=match_p2a, match_p2a=match_a2p, obj1=obj2, obj2=obj1)
+        loss_dict[_REVERSE_L_SUFFIX] = _loss_panoptic(match_a2p=match_p2a, match_p2a=match_a2p, obj1=obj2, obj2=obj1)
 
     return loss_dict
 
@@ -354,7 +384,7 @@ def loss_sinkhorn_inlier(batch_dict, reverse_loss=False, **_):
     }
 
     if reverse_loss:
-        loss_dict["(Reverse)"] = _loss_sinkhorn_inlier(batch_dict["transport2"])
+        loss_dict[_REVERSE_L_SUFFIX] = _loss_sinkhorn_inlier(batch_dict["transport2"])
 
     return loss_dict
 
