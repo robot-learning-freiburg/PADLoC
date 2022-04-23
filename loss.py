@@ -54,8 +54,8 @@ def _get_point_hcoords(batch_dict, *, point_set, mode):
     return batch_dict[points_key]
 
 
-def _loss_sinkhorn_matches(*, sinkhorn_matches, src_coords, delta_pose):
-    gt_dst_coords = torch.bmm(delta_pose, src_coords.permute(0, 2, 1))
+def _loss_sinkhorn_matches(*, sinkhorn_matches, src_coords, delta_pose_inv):
+    gt_dst_coords = torch.bmm(delta_pose_inv, src_coords.permute(0, 2, 1))
     gt_dst_coords = gt_dst_coords.permute(0, 2, 1)[:, :, :3]
     loss = (gt_dst_coords - sinkhorn_matches).norm(dim=2).mean()
     return loss
@@ -64,20 +64,20 @@ def _loss_sinkhorn_matches(*, sinkhorn_matches, src_coords, delta_pose):
 def loss_sinkhorn_matches(batch_dict, *, mode, reverse_loss=False, **_):
     sinkhorn_matches = batch_dict["sinkhorn_matches"]
     delta_pose = batch_dict["delta_pose"]
+    delta_pose_inv = delta_pose.inverse()
 
     anc_coords = _get_point_hcoords(batch_dict, point_set="anc", mode=mode)
 
     loss_dict = {
         "": _loss_sinkhorn_matches(sinkhorn_matches=sinkhorn_matches, src_coords=anc_coords,
-                                   delta_pose=delta_pose)
+                                   delta_pose_inv=delta_pose_inv)
     }
 
     if reverse_loss:
         sinkhorn_matches2 = batch_dict["sinkhorn_matches2"]
         pos_coords = _get_point_hcoords(batch_dict, point_set="pos", mode=mode)
-        delta_pose_inv = delta_pose.inverse()
         loss_dict[_REVERSE_L_SUFFIX] = _loss_sinkhorn_matches(sinkhorn_matches=sinkhorn_matches2, src_coords=pos_coords,
-                                                              delta_pose=delta_pose_inv)
+                                                              delta_pose_inv=delta_pose)
 
     return loss_dict
 
