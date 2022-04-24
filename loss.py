@@ -15,10 +15,24 @@ from utils.rotation_conversion import quaternion_atan_loss
 from utils.tools import NaNLossError
 
 
-_REVERSE_L_SUFFIX = "(Reverse)"
+_REVERSE_L_SUFFIX = "Reverse"
 
 
 # TODO: Documentation!!!
+class SubLoss:
+    def __init__(self, value, suffix=None, units=None, add_to_total=True):
+        self.value = value
+        self.suffix = suffix if suffix is not None else ""
+        self.units = units if units is not None else ""
+        self.add_to_total = add_to_total
+
+    def __str__(self):
+        loss = "Loss" if self.add_to_total else "Metric"
+        suffix = f" {self.suffix}" if self.suffix else ""
+        units = f" [{self.units}]" if self.units else ""
+        return f"{loss}{suffix}: {self.value.item()}{units}"
+
+
 def _get_point_hcoords(batch_dict, *, point_set, mode):
     points_key_dict = {
         "anc": "anc_hcoords",
@@ -54,35 +68,35 @@ def _get_point_hcoords(batch_dict, *, point_set, mode):
     return batch_dict[points_key]
 
 
-def _loss_sinkhorn_matches(*, sinkhorn_matches, src_coords, delta_pose_inv):
+def loss_sinkhorn_matches(*, sinkhorn_matches, src_coords, delta_pose_inv):
     gt_dst_coords = torch.bmm(delta_pose_inv, src_coords.permute(0, 2, 1))
     gt_dst_coords = gt_dst_coords.permute(0, 2, 1)[:, :, :3]
     loss = (gt_dst_coords - sinkhorn_matches).norm(dim=2).mean()
     return loss
 
 
-def loss_sinkhorn_matches(batch_dict, *, mode, reverse_loss=False, **_):
+def _compute_loss_sinkhorn_matches(batch_dict, *, mode, reverse_loss=False, **_):
     sinkhorn_matches = batch_dict["sinkhorn_matches"]
     delta_pose = batch_dict["delta_pose"]
     delta_pose_inv = delta_pose.inverse()
 
     anc_coords = _get_point_hcoords(batch_dict, point_set="anc", mode=mode)
 
-    loss_dict = {
-        "": _loss_sinkhorn_matches(sinkhorn_matches=sinkhorn_matches, src_coords=anc_coords,
-                                   delta_pose_inv=delta_pose_inv)
-    }
+    loss = loss_sinkhorn_matches(sinkhorn_matches=sinkhorn_matches, src_coords=anc_coords,
+                                 delta_pose_inv=delta_pose_inv)
+    losses = [SubLoss(loss)]
 
     if reverse_loss:
         sinkhorn_matches2 = batch_dict["sinkhorn_matches2"]
         pos_coords = _get_point_hcoords(batch_dict, point_set="pos", mode=mode)
-        loss_dict[_REVERSE_L_SUFFIX] = _loss_sinkhorn_matches(sinkhorn_matches=sinkhorn_matches2, src_coords=pos_coords,
-                                                              delta_pose_inv=delta_pose)
+        loss_rev = loss_sinkhorn_matches(sinkhorn_matches=sinkhorn_matches2, src_coords=pos_coords,
+                                         delta_pose_inv=delta_pose)
+        losses.append(SubLoss(loss_rev, suffix=_REVERSE_L_SUFFIX))
 
-    return loss_dict
+    return losses
 
 
-def _loss_pose(*, transformation, src_coords, delta_pose_inv):
+def loss_pose(*, transformation, src_coords, delta_pose_inv):
     gt_dst_coords = torch.bmm(delta_pose_inv, src_coords.permute(0, 2, 1).double()).float()
     gt_dst_coords = gt_dst_coords.permute(0, 2, 1)[:, :, :3]
     pred_dst_coords = torch.bmm(transformation, src_coords.permute(0, 2, 1))
@@ -91,7 +105,7 @@ def _loss_pose(*, transformation, src_coords, delta_pose_inv):
     return loss
 
 
-def loss_pose(batch_dict, *, mode, reverse_loss=False, **_):
+def _compute_loss_pose(batch_dict, *, mode, reverse_loss=False, **_):
 
     transformation = batch_dict["transformation"]
     delta_pose = batch_dict["delta_pose"].double()
@@ -99,18 +113,19 @@ def loss_pose(batch_dict, *, mode, reverse_loss=False, **_):
     anc_coords = _get_point_hcoords(batch_dict, point_set="anc", mode=mode)
     delta_pose_inv = delta_pose.inverse()
 
-    loss_dict = {
-        "": _loss_pose(transformation=transformation, src_coords=anc_coords, delta_pose_inv=delta_pose_inv)
-    }
+    loss = loss_pose(transformation=transformation, src_coords=anc_coords, delta_pose_inv=delta_pose_inv)
+    losses = [SubLoss(loss)]
 
     if reverse_loss:
         transformation2 = batch_dict["transformation2"]
         # Coordinates should be the same as in the non-reverse loss,
         # since we are only using them to compare the predicted and true transformations
-        loss_dict[_REVERSE_L_SUFFIX] = _loss_pose(transformation=transformation2, src_coords=anc_coords,
-                                                  delta_pose_inv=delta_pose)
+        loss_rev = loss_pose(transformation=transformation2, src_coords=anc_coords,
+                             delta_pose_inv=delta_pose)
 
-    return loss_dict
+        losses.append(SubLoss(loss_rev, suffix=_REVERSE_L_SUFFIX))
+
+    return losses
 
 
 def rpm_loss_for_rpmnet(points_src, transformations, delta_pose, **_):
@@ -157,28 +172,27 @@ def _remap_label(value, mapping_dict: Optional[Dict[int, int]] = None):
     return remapped_value
 
 
-def _loss_miss_classification(*, match_p2a, labels1_one_hot, labels2_one_hot, cce=True):
+def loss_missclassification(*, match_p2a, labels1_one_hot, labels2_one_hot):
     pred_labels1_one_hot = torch.bmm(match_p2a, labels2_one_hot)
 
     # Categorical Cross-Entropy loss between the one-hot encoded predicted tensor and the true indices
-    if cce:
-        masked_pred_labels_1 = pred_labels1_one_hot * labels1_one_hot
-        masked_pred_labels_1 = masked_pred_labels_1.sum(-1)  # Only select the entry for the true label
-        # masked_pred_labels_1 = pred_labels1_one_hot[labels1]  # Only select the entry for the true label
-        masked_pred_labels_1 = 1e-8 + masked_pred_labels_1  # To avoid getting NANs if the prediction is 0
-        masked_pred_labels_1 = masked_pred_labels_1.clamp(0., 1.)  # To avoid having values larger than 1
-        loss = - torch.log(masked_pred_labels_1)  # CCE Loss
-        loss = loss.mean()
-        return loss
+    # if cce:
+    masked_pred_labels_1 = pred_labels1_one_hot * labels1_one_hot
+    masked_pred_labels_1 = masked_pred_labels_1.sum(-1)  # Only select the entry for the true label
+    # masked_pred_labels_1 = pred_labels1_one_hot[labels1]  # Only select the entry for the true label
+    masked_pred_labels_1 = 1e-8 + masked_pred_labels_1  # To avoid getting NANs if the prediction is 0
+    masked_pred_labels_1 = masked_pred_labels_1.clamp(0., 1.)  # To avoid having values larger than 1
+    loss_cce = - torch.log(masked_pred_labels_1)  # CCE Loss
+    loss_cce = loss_cce.mean()
 
     # Mean Square Error between the predicted and true one-hot encoded tensors
     err_mat = labels1_one_hot - pred_labels1_one_hot
     err_vec = err_mat.square().sum(-1)
-    loss = err_vec.mean()
-    return loss
+    loss_mse = err_vec.mean()
+    return loss_cce, loss_mse
 
 
-def _loss_meta_semantic(batch_dict, *, meta, reverse_loss=False, **_):
+def _compute_loss_meta_semantic(batch_dict, *, meta, reverse_loss=False, **_):
     match_p2a = _get_normalized_matching(batch_dict, pos2anc=True)
 
     lbl_suffix = "semantic"
@@ -223,54 +237,70 @@ def _loss_meta_semantic(batch_dict, *, meta, reverse_loss=False, **_):
     lbl1_oh = lbl1_oh.detach()
     lbl2_oh = lbl2_oh.detach()
 
-    loss_dict = {
-        # "": _loss_miss_classification(match_p2a=match_p2a, labels1=lbl1_oh, labels2_one_hot=lbl2_oh, cce=False) # MSE
-        "": _loss_miss_classification(match_p2a=match_p2a, labels1_one_hot=lbl1_oh, labels2_one_hot=lbl2_oh, cce=True)
-    }
+    loss_cce, loss_mse = loss_missclassification(match_p2a=match_p2a, labels1_one_hot=lbl1_oh, labels2_one_hot=lbl2_oh)
+    losses = [
+        SubLoss(loss_cce),
+        SubLoss(loss_mse, suffix="MSE", add_to_total=False),
+    ]
 
     if reverse_loss:
         match_a2p = _get_normalized_matching(batch_dict, pos2anc=False)
 
-        # loss_dict[_REVERSE_L_SUFFIX] = _loss_miss_classification(match_p2a=match_a2p,
-        #                                                    labels1=lbl2_oh, labels2_one_hot=lbl1_oh, cce=False) # MSE
-        loss_dict[_REVERSE_L_SUFFIX] = _loss_miss_classification(match_p2a=match_a2p,
-                                                                 labels1_one_hot=lbl2_oh, labels2_one_hot=lbl1_oh,
-                                                                 cce=True)
+        loss_cce_rev, loss_mse_rev = loss_missclassification(match_p2a=match_a2p,
+                                                             labels1_one_hot=lbl2_oh, labels2_one_hot=lbl1_oh)
+        losses.append(SubLoss(loss_cce_rev, suffix=_REVERSE_L_SUFFIX))
+        losses.append(SubLoss(loss_mse_rev, suffix=f"MSE ({_REVERSE_L_SUFFIX})", add_to_total=False))
 
-    return loss_dict
-
-
-def loss_semantic(batch_dict, *, reverse_loss=False, **_):
-    return _loss_meta_semantic(batch_dict, meta=False, reverse_loss=reverse_loss)
+    return losses
 
 
-def loss_metasemantic(batch_dict, *, reverse_loss=False, **_):
-    return _loss_meta_semantic(batch_dict, meta=True, reverse_loss=reverse_loss)
+def _compute_loss_semantic(batch_dict, *, reverse_loss=False, **_):
+    return _compute_loss_meta_semantic(batch_dict, meta=False, reverse_loss=reverse_loss)
 
 
-def _loss_panoptic(*, match_a2p, match_p2a, obj1, obj2):
+def _compute_loss_metasemantic(batch_dict, *, reverse_loss=False, **_):
+    return _compute_loss_meta_semantic(batch_dict, meta=True, reverse_loss=reverse_loss)
+
+
+def loss_panoptic(*, match_a2p, match_p2a, obj1, obj2):
     mask = 1 - obj1
     pred_obj1 = torch.bmm(match_p2a, obj2)
     pred_obj1 = torch.bmm(pred_obj1, match_a2p)
     err = obj1 - pred_obj1
     masked_err = mask * err
-    # loss = masked_err.square() # Don't square them, it makes them tiny
-    loss = masked_err.abs()  # to get bigger values and more resolution
-    # loss = loss.sum([1, 2]) # Don't sum them per matrix, otherwise huge values (~400'000) that depend on points_num
-    # loss = loss.mean()  # Don't average of all values, there are a ton of zeros in the matrix, lowering the mean
+    abs_err = masked_err.abs()  # to get bigger values and more resolution
+
     batch_dim = match_a2p.shape[0]
     batch_mean_losses = torch.zeros(batch_dim, device=match_a2p.device)
+    batch_spurious_edges = torch.zeros(batch_dim, device=match_a2p.device)
+    batch_spurious_edges_percent = torch.zeros(batch_dim, device=match_a2p.device)
+    batch_mean_abs_err = torch.zeros(batch_dim, device=match_a2p.device)
+    # For each tensor in the batch
     for i in range(batch_dim):
-        batch_loss = loss[i]
-        batch_loss_non_zero = batch_loss[batch_loss != 0.]  # Keep only non-zero entries.
-        # Compute mean over the matrices, since each matrix will have diff. number of non-zero edges
-        batch_mean_loss = batch_loss_non_zero.mean()
-        batch_mean_losses[i] = batch_mean_loss
-    loss = batch_mean_losses.mean()  # mean over the batches, since each matrix mean will have different denominators
-    return loss
+        batch_obj1 = obj1[i]
+        batch_err = abs_err[i]  # Absolute errors
+
+        batch_err_non_zero = batch_err[batch_err != 0.]  # Keep only non-zero entries for the statistics
+
+        spurious_edges = batch_err_non_zero.count_nonzero()  # Number of wrong edges
+        obj1_edges = batch_obj1.count_nonzero()  # Number of good edges
+        batch_spurious_edges[i] = spurious_edges
+        batch_spurious_edges_percent[i] = spurious_edges / obj1_edges * 100.
+        batch_mean_abs_err[i] = batch_err_non_zero.mean()  # Mean Absolute error over non-zero edges
+
+        batch_loss = batch_err.square()
+        batch_mean_losses[i] = batch_loss.sum()  # Frobenius norm as the loss
+
+    # Average over the batches
+    spurious_edges = batch_spurious_edges.mean()
+    spurious_edges_percent = batch_spurious_edges_percent.mean()
+    abs_err = batch_mean_abs_err.mean()
+    loss = batch_mean_losses.mean()
+
+    return loss, spurious_edges, spurious_edges_percent, abs_err
 
 
-def loss_panoptic(batch_dict, *, reverse_loss=False, **_):
+def _compute_loss_panoptic(batch_dict, *, reverse_loss=False, **_):
     # Panoptic Label mismatch loss
     match_p2a = _get_normalized_matching(batch_dict, pos2anc=True)
     match_a2p = _get_normalized_matching(batch_dict, pos2anc=False)
@@ -290,14 +320,24 @@ def loss_panoptic(batch_dict, *, reverse_loss=False, **_):
     obj1 = obj1.detach()
     obj2 = obj2.detach()
 
-    loss_dict = {
-        "": _loss_panoptic(match_a2p=match_a2p, match_p2a=match_p2a, obj1=obj1, obj2=obj2)
-    }
+    loss, spurious_edges, spurious_edges_percent, abs_err = loss_panoptic(
+        match_a2p=match_a2p, match_p2a=match_p2a, obj1=obj1, obj2=obj2)
+    losses = [
+        SubLoss(loss),
+        SubLoss(spurious_edges, suffix="Spurious Edges", units="n", add_to_total=False),
+        SubLoss(spurious_edges_percent, suffix="Spurious Edges", units="%", add_to_total=False),
+        SubLoss(abs_err, suffix="Absolute Error", add_to_total=False)
+    ]
 
     if reverse_loss:
-        loss_dict[_REVERSE_L_SUFFIX] = _loss_panoptic(match_a2p=match_p2a, match_p2a=match_a2p, obj1=obj2, obj2=obj1)
+        loss_rev, spurious_edges_rev, spurious_edges_percent_rev, abs_err_rev = loss_panoptic(
+            match_a2p=match_p2a, match_p2a=match_a2p, obj1=obj2, obj2=obj1)
+        losses.append(SubLoss(loss_rev, suffix=_REVERSE_L_SUFFIX))
+        losses.append(SubLoss(spurious_edges_rev, suffix=f"Spurious Edges ({_REVERSE_L_SUFFIX})", add_to_total=False))
+        losses.append(SubLoss(spurious_edges_percent_rev, suffix=f"Spurious Edges ({_REVERSE_L_SUFFIX})", units="%", add_to_total=False))
+        losses.append(SubLoss(abs_err_rev, suffix=f"Absolute Error ({_REVERSE_L_SUFFIX})", add_to_total=False))
 
-    return loss_dict
+    return losses
 
 
 def inverse_tf_loss(batch_dict):
@@ -383,57 +423,74 @@ def rottrace_loss(batch_dict, delta_pose):
     return mean_rot_err, mean_rot_err_deg, mean_tra_err
 
 
-def _loss_sinkhorn_inlier(transport):
+def loss_sinkhorn_inlier(transport):
     inlier_loss = (1 - transport.sum(dim=1)).mean()
     inlier_loss += (1 - transport.sum(dim=2)).mean()
     return inlier_loss
 
 
-def loss_sinkhorn_inlier(batch_dict, reverse_loss=False, **_):
-    loss_dict = {
-        "": _loss_sinkhorn_inlier(batch_dict["transport"])
-    }
+def _compute_loss_sinkhorn_inlier(batch_dict, reverse_loss=False, **_):
+    loss = loss_sinkhorn_inlier(batch_dict["transport"])
+    losses = [SubLoss(loss)]
 
     if reverse_loss:
-        loss_dict[_REVERSE_L_SUFFIX] = _loss_sinkhorn_inlier(batch_dict["transport2"])
+        loss_rev = loss_sinkhorn_inlier(batch_dict["transport2"])
+        losses.append(SubLoss(loss_rev, suffix=_REVERSE_L_SUFFIX))
 
-    return loss_dict
+    return losses
 
 
-def loss_transl(batch_dict):
-    transl_out = batch_dict["out_translation"]
-    transl_diff = batch_dict["transl_diff"]
+def loss_transl(*, transl_out, transl_diff):
     reg_loss = torch.nn.SmoothL1Loss(reduction='none')
     # loss_transl = L1loss(transl_diff, transl_out).sum(1).mean() * exp_cfg['weight_transl']
     loss = reg_loss(transl_out, transl_diff).sum(1).mean()
-
     return loss
 
 
-def _loss_quat(batch_dict):
+def _compute_loss_transl(batch_dict):
+    transl_out = batch_dict["out_translation"]
+    transl_diff = batch_dict["transl_diff"]
+
+    loss = loss_transl(transl_out=transl_out, transl_diff=transl_diff)
+    return loss
+
+
+def loss_quat(*, yaws_out, delta_quat):
+    norm_yaws_out = F.normalize(yaws_out, dim=1)
+    loss = quaternion_atan_loss(norm_yaws_out, delta_quat).mean()
+    return loss
+
+
+def _compute_loss_quat(batch_dict):
     delta_quat = batch_dict["delta_quat"]
     yaws_out = batch_dict["out_rotation"]
 
-    yaws_out = F.normalize(yaws_out, dim=1)
-    loss_rot = quaternion_atan_loss(yaws_out, delta_quat).mean()
-    return loss_rot
+    loss = loss_quat(yaws_out=yaws_out, delta_quat=delta_quat)
+    losses = [SubLoss(loss)]
+    return losses
 
 
-def _loss_bingham(batch_dict):
-    delta_quat = batch_dict["delta_quat"]
-    yaws_out = batch_dict["out_rotation"]
-
+def loss_bingham(*, delta_quat, yaws_out):
     to_quat = QuadQuatFastSolver()
     quat_out = to_quat.apply(yaws_out)
-    loss_rot = quaternion_atan_loss(quat_out, delta_quat[:, [3, 0, 1, 2]]).mean()
-    return loss_rot
+    loss = quaternion_atan_loss(quat_out, delta_quat[:, [3, 0, 1, 2]]).mean()
+    return loss
+
+
+def _compute_loss_bingham(batch_dict):
+    delta_quat = batch_dict["delta_quat"]
+    yaws_out = batch_dict["out_rotation"]
+
+    loss = loss_bingham(delta_quat=delta_quat, yaws_out=yaws_out)
+    losses = [SubLoss(loss)]
+    return losses
 
 
 class QuatRotationLoss:
 
     _LOSS_FN_DICT = {
-        "quat": _loss_quat,
-        "bingham": _loss_bingham,
+        "quat": _compute_loss_quat,
+        "bingham": _compute_loss_bingham,
     }
 
     def __init__(self, cfg):
@@ -445,16 +502,66 @@ class QuatRotationLoss:
 
         rot_repr = cfg['rot_representation']
 
-        loss_fn_dict = {
-
-        }
-        if rot_repr not in loss_fn_dict:
+        if rot_repr not in self._LOSS_FN_DICT:
             raise NotImplementedError(f"No loss function configured for {rot_repr}.")
 
-        self.loss_fn = loss_fn_dict[rot_repr]
+        self.loss_fn = self._LOSS_FN_DICT[rot_repr]
 
     def __call__(self, batch_dict, **_):
-        return self.loss_fn(batch_dict)
+        losses = self.loss_fn(batch_dict)
+        return losses
+
+
+def loss_sincos(*, delta_rot, yaws_out, reg_loss):
+    # diff_rot = (anchor_yaws - positive_yaws)
+    diff_rot = delta_rot[:, 2]
+    diff_rot_cos = torch.cos(diff_rot)
+    diff_rot_sin = torch.sin(diff_rot)
+    yaws_out_cos = yaws_out[:, 0]
+    yaws_out_sin = yaws_out[:, 1]
+    loss_rot = reg_loss(yaws_out_sin, diff_rot_sin).mean()
+    loss_rot = loss_rot + reg_loss(yaws_out_cos, diff_rot_cos).mean()
+    return loss_rot
+
+
+def loss_sincos_atan(*, delta_rot, yaws_out, reg_loss):
+    # diff_rot = (anchor_yaws - positive_yaws)
+    diff_rot = delta_rot[:, 2]
+    yaws_out_cos = yaws_out[:, 0]
+    yaws_out_sin = yaws_out[:, 1]
+    yaws_out_final = torch.atan2(yaws_out_sin, yaws_out_cos)
+    diff_rot_atan = torch.atan2(diff_rot.sin(), diff_rot.cos())
+    loss_rot = reg_loss(yaws_out_final, diff_rot_atan).mean()
+    return loss_rot
+
+
+def loss_yaw(*, delta_rot, yaws_out):
+    # diff_rot = (anchor_yaws - positive_yaws) % (2*np.pi)
+    diff_rot = delta_rot[:, 2] % (2*np.pi)
+    yaws_out = yaws_out % (2*np.pi)
+    loss_rot = torch.abs(diff_rot - yaws_out)
+    loss_rot[loss_rot > np.pi] = 2*np.pi - loss_rot[loss_rot > np.pi]
+    loss_rot = loss_rot.mean()
+    return loss_rot
+
+
+def loss_cross_entropy(*, delta_rot, yaws_out, num_classes, reg_loss):
+    yaw_out_bins = yaws_out[:, :-1]
+    yaw_out_delta = yaws_out[:, -1]
+    bin_size = 2*np.pi / num_classes
+    # diff_rot = (anchor_yaws - positive_yaws) % (2*np.pi)
+    diff_rot = delta_rot[:, 2] % (2*np.pi)
+    gt_bins = torch.zeros(diff_rot.shape[0], dtype=torch.long, device=yaws_out.device)
+    for i in range(num_classes):
+        lower_bound = i * bin_size
+        upper_bound = (i+1) * bin_size
+        indexes = (diff_rot >= lower_bound) & (diff_rot < upper_bound)
+        gt_bins[indexes] = i
+    gt_delta = diff_rot - bin_size*gt_bins
+
+    loss_rot_fn = torch.nn.CrossEntropyLoss()
+    loss_rot = loss_rot_fn(yaw_out_bins, gt_bins) + reg_loss(yaw_out_delta, gt_delta).mean()
+    return loss_rot
 
 
 class RotationLoss:
@@ -468,9 +575,9 @@ class RotationLoss:
         rot_repr = cfg['rot_representation']
 
         loss_fn_dict = {
-            "sincos": self._loss_sincos,
-            "sincos_atan": self._loss_sincos_atan,
-            "yaw": self._loss_yaw,
+            "sincos": self._compute_loss_sincos,
+            "sincos_atan": self._compute_loss_sincos_atan,
+            "yaw": self._compute_loss_yaw,
         }
 
         if rot_repr in loss_fn_dict:
@@ -480,74 +587,50 @@ class RotationLoss:
         if rot_repr.startswith("ce"):
             token = rot_repr.split("_")
             self.num_classes = int(token[1])
-            self.loss_fn = self._loss_cross_entropy
+            self.loss_fn = self._compute_loss_cross_entropy
             return
 
         raise NotImplementedError(f"No loss function configured for {rot_repr}.")
 
-    def _loss_sincos(self, batch_dict):
+    def _compute_loss_sincos(self, batch_dict):
         delta_rot = batch_dict["delta_rot"]
         yaws_out = batch_dict["out_rotation"]
 
-        # diff_rot = (anchor_yaws - positive_yaws)
-        diff_rot = delta_rot[:, 2]
-        diff_rot_cos = torch.cos(diff_rot)
-        diff_rot_sin = torch.sin(diff_rot)
-        yaws_out_cos = yaws_out[:, 0]
-        yaws_out_sin = yaws_out[:, 1]
-        loss_rot = self.reg_loss(yaws_out_sin, diff_rot_sin).mean()
-        loss_rot = loss_rot + self.reg_loss(yaws_out_cos, diff_rot_cos).mean()
-        return loss_rot
+        loss = loss_sincos(delta_rot=delta_rot, yaws_out=yaws_out, reg_loss=self.reg_loss)
+        losses = [SubLoss(loss)]
+        return losses
 
-    def _loss_sincos_atan(self, batch_dict):
+    def _compute_loss_sincos_atan(self, batch_dict):
         delta_rot = batch_dict["delta_rot"]
         yaws_out = batch_dict["out_rotation"]
 
-        # diff_rot = (anchor_yaws - positive_yaws)
-        diff_rot = delta_rot[:, 2]
-        yaws_out_cos = yaws_out[:, 0]
-        yaws_out_sin = yaws_out[:, 1]
-        yaws_out_final = torch.atan2(yaws_out_sin, yaws_out_cos)
-        diff_rot_atan = torch.atan2(diff_rot.sin(), diff_rot.cos())
-        loss_rot = self.reg_loss(yaws_out_final, diff_rot_atan).mean()
-        return loss_rot
+        loss = loss_sincos_atan(delta_rot=delta_rot, yaws_out=yaws_out, reg_loss=self.reg_loss)
+        losses = [SubLoss(loss)]
+        return losses
 
     @staticmethod
-    def _loss_yaw(batch_dict):
+    def _compute_loss_yaw(batch_dict):
         delta_rot = batch_dict["delta_rot"]
         yaws_out = batch_dict["out_rotation"]
 
-        # diff_rot = (anchor_yaws - positive_yaws) % (2*np.pi)
-        diff_rot = delta_rot[:, 2] % (2*np.pi)
-        yaws_out = yaws_out % (2*np.pi)
-        loss_rot = torch.abs(diff_rot - yaws_out)
-        loss_rot[loss_rot > np.pi] = 2*np.pi - loss_rot[loss_rot > np.pi]
-        loss_rot = loss_rot.mean()
-        return loss_rot
+        loss = loss_yaw(delta_rot=delta_rot, yaws_out=yaws_out)
+        losses = [SubLoss(loss)]
+        return losses
 
-    def _loss_cross_entropy(self, batch_dict):
+    def _compute_loss_cross_entropy(self, batch_dict):
         delta_rot = batch_dict["delta_rot"]
         yaws_out = batch_dict["out_rotation"]
 
-        yaw_out_bins = yaws_out[:, :-1]
-        yaw_out_delta = yaws_out[:, -1]
-        bin_size = 2*np.pi / self.num_classes
-        # diff_rot = (anchor_yaws - positive_yaws) % (2*np.pi)
-        diff_rot = delta_rot[:, 2] % (2*np.pi)
-        gt_bins = torch.zeros(diff_rot.shape[0], dtype=torch.long, device=yaws_out.device)
-        for i in range(self.num_classes):
-            lower_bound = i * bin_size
-            upper_bound = (i+1) * bin_size
-            indexes = (diff_rot >= lower_bound) & (diff_rot < upper_bound)
-            gt_bins[indexes] = i
-        gt_delta = diff_rot - bin_size*gt_bins
+        loss = loss_cross_entropy(delta_rot=delta_rot, yaws_out=yaws_out,
+                                  num_classes=self.num_classes, reg_loss=self.reg_loss)
+        losses = [SubLoss(loss)]
+        return losses
 
-        loss_rot_fn = torch.nn.CrossEntropyLoss()
-        loss_rot = loss_rot_fn(yaw_out_bins, gt_bins) + self.reg_loss(yaw_out_delta, gt_delta).mean()
-        return loss_rot
+    def compute_loss(self, batch_dict, **_):
+        return self.loss_fn(batch_dict)
 
     def __call__(self, batch_dict, **_):
-        return self.loss_fn(batch_dict)
+        return self.compute_loss(batch_dict)
 
 
 class TripletLoss(nn.Module):
@@ -571,7 +654,9 @@ class TripletLoss(nn.Module):
         distance_negative = dist_mat[triplets[0], triplets[2]]
         curr_margin = self.distance.margin(distance_positive, distance_negative)
         loss = F.relu(curr_margin + self.margin)
-        return loss.mean()
+        loss = loss.mean()
+        losses = [SubLoss(loss)]
+        return losses
 
 
 class MyCircleLoss(PyCircleLoss):
@@ -818,7 +903,7 @@ class MetricLoss:
         self.loss_function = loss_fn
         self.norm_embeddings = cfg['norm_embeddings']
 
-    def __call__(self, batch_dict, *, mode, **_):
+    def _compute_loss(self, batch_dict, *, mode, **_):
 
         model_out = batch_dict["out_embedding"]
         neg_mask = batch_dict["neg_mask"]
@@ -838,6 +923,9 @@ class MetricLoss:
                 pos_mask[i+batch_size, i] = 1
 
         return self.loss_function(model_out, pos_mask, neg_mask)
+
+    def __call__(self, batch_dict, *, mode, **_):
+        return self._compute_loss(batch_dict, mode=mode)
 
 
 class LossFunction:
@@ -867,6 +955,9 @@ class LossFunction:
 
         return self._function(batch_dict, mode=mode, reverse_loss=reverse_loss)
 
+    def __str__(self):
+        return f"{self.label} (w = {self.weight})"
+
 
 class TotalLossFunction:
 
@@ -889,7 +980,7 @@ class TotalLossFunction:
 
         if cfg['weight_transl'] > 0. and cfg['rot_representation'] != '6dof':
             self.loss_functions.append(
-                LossFunction(loss_transl, label="Translation", weight=cfg["weight_transl"],
+                LossFunction(_compute_loss_transl, label="Translation", weight=cfg["weight_transl"],
                              batch_keys=["out_translation", "transl_diff"])
             )
 
@@ -905,7 +996,7 @@ class TotalLossFunction:
                 rot_batch_keys = [ "delta_quat", "out_rotation"]
                 rot_rev_batch_keys = []
             elif rot_repr == "6dof":
-                loss_rot = loss_pose
+                loss_rot = _compute_loss_pose
                 rot_batch_keys = ["transformation", "delta_pose"]
                 rot_rev_batch_keys = ["transformation2"]
             else:
@@ -920,35 +1011,36 @@ class TotalLossFunction:
             if cfg['head'] in ["SuperGlue", "Transformer", "PyTransformer", "TFHead", "MLFeatTF"] \
                     and cfg['sinkhorn_aux_loss']:
                 self.loss_functions.append(
-                    LossFunction(loss_sinkhorn_matches, label="Aux Matches", weight=0.05 * cfg["weight_rot"],
+                    LossFunction(_compute_loss_sinkhorn_matches, label="Aux Matches", weight=0.05 * cfg["weight_rot"],
                                  batch_keys=["sinkhorn_matches", "delta_pose", "point_coords", "batch_size"],
                                  rev_batch_keys=["sinkhorn_matches2"], reverse_loss=self.reverse_loss)
                 )
 
             if cfg['head'] == "SuperGlue" and cfg['sinkhorn_type'] == 'slack':
                 self.loss_functions.append(
-                    LossFunction(loss_sinkhorn_inlier, label="Sinkhorn Inlier", weight=0.01 * cfg["weight_rot"],
+                    LossFunction(_compute_loss_sinkhorn_inlier, label="Sinkhorn Inlier",
+                                 weight=0.01 * cfg["weight_rot"],
                                  batch_keys=["transport"], rev_batch_keys=["transport2"],
                                  reverse_loss=self.reverse_loss)
                 )
 
         if cfg['panoptic_weight'] > 0.:
             self.loss_functions.append(
-                LossFunction(loss_panoptic, label="Panoptic Mismatch", weight=cfg["panoptic_weight"],
+                LossFunction(_compute_loss_panoptic, label="Panoptic Mismatch", weight=cfg["panoptic_weight"],
                              batch_keys=["transport", "transport2", "keypoint_idxs",
                                          "anchor_panoptic", "positive_panoptic"], reverse_loss=self.reverse_loss)
             )
 
         if cfg["semantic_weight"] > 0.:
             self.loss_functions.append(
-                LossFunction(loss_semantic, label="Semantic Mismatch", weight=cfg["semantic_weight"],
+                LossFunction(_compute_loss_semantic, label="Semantic Mismatch", weight=cfg["semantic_weight"],
                              batch_keys=["transport", "class_one_hot_map", "anchor_semantic", "positive_semantic"],
                              rev_batch_keys=["transport2"], reverse_loss=self.reverse_loss)
             )
 
         if cfg["supersem_weight"] > 0.:
             self.loss_functions.append(
-                LossFunction(loss_metasemantic, label="Meta-Semantic Mismatch", weight=cfg["supersem_weight"],
+                LossFunction(_compute_loss_metasemantic, label="Meta-Semantic Mismatch", weight=cfg["supersem_weight"],
                              batch_keys=["transport", "superclass_one_hot_map", "anchor_supersem", "positive_supersem"],
                              rev_batch_keys=["transport2"], reverse_loss=self.reverse_loss)
             )
@@ -961,43 +1053,45 @@ class TotalLossFunction:
                 )
             )
 
-    @staticmethod
-    def loss_has_nan(loss, *, label):
-        if torch.any(torch.isnan(loss)):
-            raise NaNLossError(f"{label} contains a NaN.")
-
     def compute_losses(self, batch_dict):
-        loss_dict = {
-           "total": 0,
-           "aux": {}
-        }
+        total_loss = 0.
+        sub_losses = {}
 
         for loss_func in self.loss_functions:
 
             # Compute the loss(es).
             losses = loss_func(batch_dict, mode=self.mode, reverse_loss=self.reverse_loss)
-            if not isinstance(losses, dict):
-                losses = {"": losses}
+            if not isinstance(losses, list):
+                if not isinstance(losses, SubLoss):
+                    losses = SubLoss(losses)
+                losses = [losses]
 
-            subtotal_loss = 0
-            num_losses = float(len(losses.keys()))
+            subtotal_loss = 0.
+            num_losses = 0.
 
-            for suffix, loss in losses.items():
-                loss_label = "Loss: " + loss_func.label
-                if suffix != "":
-                    loss_label += " " + suffix
+            for subloss in losses:
+
+                loss_label = "Loss: " if subloss.add_to_total else "Metric: "
+                loss_label += loss_func.label
+                loss_label += f" [{subloss.units}]" if subloss.units else ""
+                loss_label += f" ({subloss.suffix})" if subloss.suffix else ""
 
                 # Check for NANs. Raise exception if so, to avoid backpropagating it
-                self.loss_has_nan(loss, label=loss_label)
-                loss_dict["aux"][loss_label] = loss
-                subtotal_loss += loss
+                if torch.any(torch.isnan(subloss.value)):
+                    raise NaNLossError(f"{loss_label} contains a NaN.")
+
+                sub_losses[loss_label] = subloss.value
+
+                if subloss.add_to_total:
+                    subtotal_loss += subloss.value
+                    num_losses += 1
 
             # Average losses in case there was more than one (e.g. for reverse losses)
             if num_losses > 1:
                 subtotal_loss /= num_losses
-            loss_dict["total"] += loss_func.weight * subtotal_loss
+            total_loss += loss_func.weight * subtotal_loss
 
-        return loss_dict
+        return total_loss, sub_losses
 
     def __call__(self, batch_dict):
         return self.compute_losses(batch_dict)

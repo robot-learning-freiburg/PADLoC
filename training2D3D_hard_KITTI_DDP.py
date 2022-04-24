@@ -276,13 +276,9 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
             batch_dict["class_one_hot_map"] = sample["class_one_hot_map"]
             batch_dict["superclass_one_hot_map"] = sample["superclass_one_hot_map"]
 
-        loss_dict = loss_fn(batch_dict)
-        total_loss = loss_dict["total"]
-        loss_rot = loss_dict["aux"].pop("Loss: Rotation") if "Loss: Rotation" in loss_dict["aux"] \
-            else torch.tensor([0.], device=device)
-        loss_transl = loss_dict["aux"].pop("Loss: Translation") if "Loss: Translation" in loss_dict["aux"] \
-            else torch.tensor([0.], device=device)
-        aux_losses = loss_dict["aux"]
+        total_loss, sub_losses = loss_fn(batch_dict)
+        loss_rot = sub_losses.pop("Loss: Rotation", torch.tensor([0.], device=device))
+        loss_transl = sub_losses.pop("Loss: Translation", torch.tensor([0.], device=device))
 
         if torch.any(torch.isnan(total_loss)):
             raise NaNLossError("Total Loss has NAN")
@@ -293,7 +289,7 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
             raise NotImplementedError("TZMGrad not implemented in DDP")
         optimizer.step()
 
-        return total_loss, loss_rot, loss_transl, aux_losses
+        return total_loss, loss_rot, loss_transl, sub_losses
 
 
 def test(model, sample, exp_cfg, device):
