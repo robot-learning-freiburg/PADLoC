@@ -10,7 +10,7 @@ class SVDRegistration:
 		self.debug = debug
 
 	def __call__(self, *, src_coords, tgt_coords, weights=None):
-		return self.forward(src_coords=src_coords, tgt_coords=tgt_coords, weights=None)
+		return self.forward(src_coords=src_coords, tgt_coords=tgt_coords, weights=weights)
 
 	def forward(self, *, src_coords, tgt_coords, weights=None):
 
