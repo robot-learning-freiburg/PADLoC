@@ -944,6 +944,12 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         local_loss = 0.
         local_iter = 0
         total_iter = 0
+        other_local_loss_keys = {
+            "Loss: Panoptic Mismatch": "loss_pan",
+            "Loss: Semantic Mismatch": "loss_sem",
+            "Loss: Meta-Semantic Mismatch": "loss_mse",
+        }
+        other_local_loss = {}
         store_data = False
 
         if rank == 0:
@@ -1001,10 +1007,39 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                 local_loss += loss
                 local_iter += 1
 
-                if batch_idx % 20 == 0 and batch_idx != 0:
-                    print('Iter %d / %d training loss = %.3f , time = %.2f' % (batch_idx,
+                for k in other_local_loss_keys.keys():
+                    cnt = 0.
+                    tmp_other_local_loss = 0
+                    if k in other_losses:
+                        tmp_other_local_loss += other_losses[k].item()
+                        cnt += 1.
+
+                    if k + " (Reverse)" in other_losses:
+                        tmp_other_local_loss += other_losses[k + " (Reverse)"].item()
+                        cnt += 1.
+
+                    if cnt > 1:
+                        tmp_other_local_loss = tmp_other_local_loss / cnt
+
+                    tmp_other_local_loss = tmp_other_local_loss / batch_world_size
+
+                    if k in other_local_loss:
+                        other_local_loss[k] += tmp_other_local_loss
+                    else:
+                        other_local_loss[k] = tmp_other_local_loss
+
+
+                if batch_idx % args.print_iteration == 0 and batch_idx != 0:
+                    other_loss_sum = ""
+
+                    if args.print_other_losses:
+                        for k1, k2 in other_local_loss_keys.items():
+                            other_loss_sum += f"{k2}={other_local_loss[k1] / local_iter:.3f}, "
+                            other_local_loss[k1] = 0.
+                    print('Iter %d / %d training loss = %.3f, %stime = %.2f' % (batch_idx,
                                                                                len(TrainLoader),
                                                                                local_loss / local_iter,
+                                                                               other_loss_sum,
                                                                                time.time() - start_time))
                     local_loss = 0.
                     local_iter = 0.
@@ -1273,6 +1308,10 @@ if __name__ == '__main__':
                         help='Comma separated list of strings to be matched with the model\'s parameter names'
                              ' to be unfrozen.')
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--print_iteration', type=int, default=20,
+                        help='Print stats after this number of iterations.')
+    parser.add_argument('--print_other_losses', action='store_true', default=False,
+                        help='Print other losses during training')
 
     parser.add_argument('--config', default="wandb_config.yaml")
 
