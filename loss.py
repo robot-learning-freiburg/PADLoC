@@ -172,7 +172,7 @@ def _remap_label(value, mapping_dict: Optional[Dict[int, int]] = None):
     return remapped_value
 
 
-def loss_missclassification(*, match_p2a, labels1_one_hot, labels2_one_hot):
+def loss_missclassification(*, match_p2a, labels1_one_hot, labels2_one_hot, eps=1e-6):
     pred_labels1_one_hot = torch.bmm(match_p2a, labels2_one_hot)
 
     # Categorical Cross-Entropy loss between the one-hot encoded predicted tensor and the true indices
@@ -180,8 +180,8 @@ def loss_missclassification(*, match_p2a, labels1_one_hot, labels2_one_hot):
     masked_pred_labels_1 = pred_labels1_one_hot * labels1_one_hot
     masked_pred_labels_1 = masked_pred_labels_1.sum(-1)  # Only select the entry for the true label
     # masked_pred_labels_1 = pred_labels1_one_hot[labels1]  # Only select the entry for the true label
-    masked_pred_labels_1 = 1e-8 + masked_pred_labels_1  # To avoid getting NANs if the prediction is 0
-    masked_pred_labels_1 = masked_pred_labels_1.clamp(0., 1.)  # To avoid having values larger than 1
+    masked_pred_labels_1 = eps + masked_pred_labels_1  # To avoid getting NANs if the prediction is 0
+    masked_pred_labels_1 = masked_pred_labels_1.clamp(0., 1.)  # To avoid values larger than 1 (should be unnecessary)
     loss_cce = - torch.log(masked_pred_labels_1)  # CCE Loss
     loss_cce = loss_cce.mean()
 
@@ -262,7 +262,7 @@ def _compute_loss_metasemantic(batch_dict, *, reverse_loss=False, **_):
     return _compute_loss_meta_semantic(batch_dict, meta=True, reverse_loss=reverse_loss)
 
 
-def loss_panoptic(*, match_a2p, match_p2a, obj1, obj2):
+def loss_panoptic(*, match_a2p, match_p2a, obj1, obj2, spurious_threshold=0.1):
     mask = 1 - obj1
     pred_obj1 = torch.bmm(match_p2a, obj2)
     pred_obj1 = torch.bmm(pred_obj1, match_a2p)
@@ -271,33 +271,42 @@ def loss_panoptic(*, match_a2p, match_p2a, obj1, obj2):
     abs_err = masked_err.abs()  # to get bigger values and more resolution
 
     batch_dim = match_a2p.shape[0]
-    batch_mean_losses = torch.zeros(batch_dim, device=match_a2p.device)
-    batch_spurious_edges = torch.zeros(batch_dim, device=match_a2p.device)
-    batch_spurious_edges_percent = torch.zeros(batch_dim, device=match_a2p.device)
-    batch_mean_abs_err = torch.zeros(batch_dim, device=match_a2p.device)
+    # mean_batch_sqfrob = torch.zeros(batch_dim, device=match_a2p.device)  # Square Frobenius Norm
+    mean_batch_mse = torch.zeros(batch_dim, device=match_a2p.device)  # Mean Square Error
+    mean_batch_se = torch.zeros(batch_dim, device=match_a2p.device)  # Spurious Edges
+    mean_batch_se_pc = torch.zeros(batch_dim, device=match_a2p.device)  # Spurious Edges [%]
+    mean_batch_mae = torch.zeros(batch_dim, device=match_a2p.device)  # Mean Absolute Error
+    # mean_batch_nz_mae = torch.zeros(batch_dim, device=match_a2p.device)  # Mean Absolute Error (Non-Zeros)
     # For each tensor in the batch
     for i in range(batch_dim):
         batch_obj1 = obj1[i]
+        obj1_edges = batch_obj1.count_nonzero()  # Number of good edges
         batch_err = abs_err[i]  # Absolute errors
 
-        batch_err_non_zero = batch_err[batch_err != 0.]  # Keep only non-zero entries for the statistics
+        batch_err_non_zero = batch_err[batch_err > spurious_threshold]  # Keep only non-zero entries for the statistics
 
-        spurious_edges = batch_err_non_zero.count_nonzero()  # Number of wrong edges
-        obj1_edges = batch_obj1.count_nonzero()  # Number of good edges
-        batch_spurious_edges[i] = spurious_edges
-        batch_spurious_edges_percent[i] = spurious_edges / obj1_edges * 100.
-        batch_mean_abs_err[i] = batch_err_non_zero.mean()  # Mean Absolute error over non-zero edges
+        batch_spurious_edges = batch_err_non_zero.count_nonzero()  # Number of wrong edges (every edge >0.1 is wrong)
 
-        batch_loss = batch_err.square()
-        batch_mean_losses[i] = batch_loss.sum()  # Frobenius norm as the loss
+        mean_batch_se[i] = batch_spurious_edges
+        mean_batch_se_pc[i] = batch_spurious_edges / obj1_edges * 100.
+
+        # mean_batch_nz_mae[i] = batch_err_non_zero.mean()  # Mean Absolute Error over non-zero edges
+        mean_batch_mae[i] = batch_err.mean()
+
+        batch_square_err = batch_err.square()
+        # mean_batch_sqfrob[i] = batch_square_err.sum()  # Squared Frobenius Norm
+        mean_batch_mse[i] = batch_square_err.mean()  # Mean Square Error
 
     # Average over the batches
-    spurious_edges = batch_spurious_edges.mean()
-    spurious_edges_percent = batch_spurious_edges_percent.mean()
-    abs_err = batch_mean_abs_err.mean()
-    loss = batch_mean_losses.mean()
+    spurious_edges = mean_batch_se.mean()
+    spurious_edges_percent = mean_batch_se_pc.mean()
+    mean_abs_err = mean_batch_mae.mean()
+    # mean_abs_err_nz = mean_batch_nz_mae.mean()
+    # frob_err = mean_batch_sqfrob.mean()
+    mean_square_err = mean_batch_mse.mean()
 
-    return loss, spurious_edges, spurious_edges_percent, abs_err
+    # return frob_err, mean_square_err, spurious_edges, spurious_edges_percent, mean_abs_err, mean_abs_err_nz
+    return mean_square_err, spurious_edges, spurious_edges_percent, mean_abs_err
 
 
 def _compute_loss_panoptic(batch_dict, *, reverse_loss=False, **_):
@@ -320,22 +329,25 @@ def _compute_loss_panoptic(batch_dict, *, reverse_loss=False, **_):
     obj1 = obj1.detach()
     obj2 = obj2.detach()
 
-    loss, spurious_edges, spurious_edges_percent, abs_err = loss_panoptic(
+    mean_square_err, spurious_edges, spurious_edges_percent, mean_abs_err = loss_panoptic(
         match_a2p=match_a2p, match_p2a=match_p2a, obj1=obj1, obj2=obj2)
     losses = [
-        SubLoss(loss),
+        SubLoss(mean_abs_err),
         SubLoss(spurious_edges, suffix="Spurious Edges", units="n", add_to_total=False),
         SubLoss(spurious_edges_percent, suffix="Spurious Edges", units="%", add_to_total=False),
-        SubLoss(abs_err, suffix="Absolute Error", add_to_total=False)
+        # SubLoss(mean_abs_err_nz, suffix="Absolute Error", add_to_total=False),
+        SubLoss(mean_square_err, suffix="Mean Square Error", add_to_total=False)
     ]
 
     if reverse_loss:
-        loss_rev, spurious_edges_rev, spurious_edges_percent_rev, abs_err_rev = loss_panoptic(
+        mean_square_err_r, spurious_edges_r, spurious_edges_percent_r, mean_abs_err_r = loss_panoptic(
             match_a2p=match_p2a, match_p2a=match_a2p, obj1=obj2, obj2=obj1)
-        losses.append(SubLoss(loss_rev, suffix=_REVERSE_L_SUFFIX))
-        losses.append(SubLoss(spurious_edges_rev, suffix=f"Spurious Edges ({_REVERSE_L_SUFFIX})", add_to_total=False))
-        losses.append(SubLoss(spurious_edges_percent_rev, suffix=f"Spurious Edges ({_REVERSE_L_SUFFIX})", units="%", add_to_total=False))
-        losses.append(SubLoss(abs_err_rev, suffix=f"Absolute Error ({_REVERSE_L_SUFFIX})", add_to_total=False))
+        losses.append(SubLoss(mean_abs_err_r, suffix=_REVERSE_L_SUFFIX))
+        losses.append(SubLoss(spurious_edges_r, suffix=f"Spurious Edges ({_REVERSE_L_SUFFIX})", add_to_total=False))
+        losses.append(SubLoss(spurious_edges_percent_r, suffix=f"Spurious Edges ({_REVERSE_L_SUFFIX})",
+                              units="%", add_to_total=False))
+        # losses.append(SubLoss(mean_abs_err_nz_r, suffix=f"Absolute Error ({_REVERSE_L_SUFFIX})", add_to_total=False))
+        losses.append(SubLoss(mean_square_err_r, suffix=f"Mean Square Error ({_REVERSE_L_SUFFIX})", add_to_total=False))
 
     return losses
 

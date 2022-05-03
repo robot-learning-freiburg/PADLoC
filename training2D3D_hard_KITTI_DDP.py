@@ -945,9 +945,9 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         local_iter = 0
         total_iter = 0
         other_local_loss_keys = {
-            "Loss: Panoptic Mismatch": "loss_pan",
+            # "Loss: Panoptic Mismatch": "loss_pan",
             "Loss: Semantic Mismatch": "loss_sem",
-            "Loss: Meta-Semantic Mismatch": "loss_mse",
+            # "Loss: Meta-Semantic Mismatch": "loss_mse",
         }
         other_local_loss = {}
         store_data = False
