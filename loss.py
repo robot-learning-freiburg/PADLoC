@@ -188,8 +188,10 @@ def loss_missclassification(*, match_p2a, labels1_one_hot, labels2_one_hot, eps=
     # Mean Square Error between the predicted and true one-hot encoded tensors
     err_mat = labels1_one_hot - pred_labels1_one_hot
     err_vec = err_mat.square().sum(-1)
+    err_vec_mae = err_mat.abs().sum(-1)
     loss_mse = err_vec.mean()
-    return loss_cce, loss_mse
+    loss_mae = err_vec_mae.mean()
+    return loss_cce, loss_mse, loss_mae
 
 
 def _compute_loss_meta_semantic(batch_dict, *, meta, reverse_loss=False, **_):
@@ -237,18 +239,20 @@ def _compute_loss_meta_semantic(batch_dict, *, meta, reverse_loss=False, **_):
     lbl1_oh = lbl1_oh.detach()
     lbl2_oh = lbl2_oh.detach()
 
-    loss_cce, loss_mse = loss_missclassification(match_p2a=match_p2a, labels1_one_hot=lbl1_oh, labels2_one_hot=lbl2_oh)
+    loss_cce, loss_mse, loss_mae = loss_missclassification(match_p2a=match_p2a, labels1_one_hot=lbl1_oh, labels2_one_hot=lbl2_oh)
     losses = [
-        SubLoss(loss_cce),
+        SubLoss(loss_mae),
+        SubLoss(loss_cce, suffix="CCE", add_to_total=False),
         SubLoss(loss_mse, suffix="MSE", add_to_total=False),
     ]
 
     if reverse_loss:
         match_a2p = _get_normalized_matching(batch_dict, pos2anc=False)
 
-        loss_cce_rev, loss_mse_rev = loss_missclassification(match_p2a=match_a2p,
+        loss_cce_rev, loss_mse_rev, loss_mae_rev = loss_missclassification(match_p2a=match_a2p,
                                                              labels1_one_hot=lbl2_oh, labels2_one_hot=lbl1_oh)
-        losses.append(SubLoss(loss_cce_rev, suffix=_REVERSE_L_SUFFIX))
+        losses.append(SubLoss(loss_mae_rev, suffix=_REVERSE_L_SUFFIX))
+        losses.append(SubLoss(loss_cce_rev, suffix=f"CCE ({_REVERSE_L_SUFFIX}", add_to_total=False))
         losses.append(SubLoss(loss_mse_rev, suffix=f"MSE ({_REVERSE_L_SUFFIX})", add_to_total=False))
 
     return losses
