@@ -809,8 +809,10 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     # model.load_state_dict(checkpoint['state_dict'])
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model.train()
-    model = DistributedDataParallel(model.to(device), device_ids=[rank], output_device=rank,
-                                    find_unused_parameters=True)
+    # Only use for debugging, otherwise it can slow down things
+    # model = DistributedDataParallel(model.to(device), device_ids=[rank], output_device=rank,
+    #                                 find_unused_parameters=True)
+    model = DistributedDataParallel(model.to(device), device_ids=[rank], output_device=rank)
     # if args.wandb and rank == 0:
     #     wandb.watch(model)
     # print('Number of model parameters: {}'.format(sum([p.data.nelement() for p in model.parameters()])))
