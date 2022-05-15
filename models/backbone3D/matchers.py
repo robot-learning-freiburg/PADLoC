@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 
 from .xatransformer import XATransformerEncoder, XATransformerEncoderLayer
@@ -8,6 +9,77 @@ def normalize_matching(matching):
 	matching_rows = matching.sum(2, keepdim=True)
 	matching_rows[matching_rows < 1e-6] = 1  # Ignore rows that add up to 0 (Set to one to avoid division by 0)
 	return matching / matching_rows
+
+
+def sinkhorn_unbalanced(*, src_features, tgt_features, epsilon, gamma, max_iter):
+	"""
+	Sinkhorn algorithm
+	Parameters
+	----------
+	src_features : torch.Tensor
+		Feature for points cloud 1. Used to computed transport cost.
+		Size B x N x C.
+	tgt_features : torch.Tensor
+		Feature for points cloud 2. Used to computed transport cost.
+		Size B x M x C.
+	epsilon : torch.Tensor
+		Entropic regularisation. Scalar.
+	gamma : torch.Tensor
+		Mass regularisation. Scalar.
+	max_iter : int
+		Number of unrolled iteration of the Sinkhorn algorithm.
+	Returns
+	-------
+	torch.Tensor
+		Transport plan between point cloud 1 and 2. Size B x N x M.
+	"""
+
+	# Transport cost matrix
+	src_features = src_features / torch.sqrt(torch.sum(src_features ** 2, -1, keepdim=True) + 1e-8)
+	tgt_features = tgt_features / torch.sqrt(torch.sum(tgt_features ** 2, -1, keepdim=True) + 1e-8)
+	C = 1.0 - torch.bmm(src_features, tgt_features.transpose(1, 2))
+
+	# Entropic regularisation
+	k = torch.exp(-C / epsilon)
+
+	# Early return if no iteration
+	if max_iter == 0:
+		return k
+
+	# Init. of Sinkhorn algorithm
+	power = gamma / (gamma + epsilon)
+	a = (
+			torch.ones(
+				(k.shape[0], k.shape[1], 1), device=src_features.device, dtype=src_features.dtype
+			)
+			/ k.shape[1]
+	)
+	prob1 = (
+			torch.ones(
+				(k.shape[0], k.shape[1], 1), device=src_features.device, dtype=src_features.dtype
+			)
+			/ k.shape[1]
+	)
+	prob2 = (
+			torch.ones(
+				(k.shape[0], k.shape[2], 1), device=tgt_features.device, dtype=tgt_features.dtype
+			)
+			/ k.shape[2]
+	)
+
+	# Sinkhorn algorithm
+	for _ in range(max_iter):
+		# Update b
+		kT_a = torch.bmm(k.transpose(1, 2), a)
+		b = torch.pow(prob2 / (kT_a + 1e-8), power)
+		# Update a
+		k_b = torch.bmm(k, b)
+		a = torch.pow(prob1 / (k_b + 1e-8), power)
+
+	# Transportation map
+	t = torch.mul(torch.mul(a, k), b.transpose(1, 2))
+
+	return t
 
 
 class TFEncMatcher(nn.Module):
@@ -91,11 +163,32 @@ class TFMLEncMatcher(nn.Module):
 		return x, matching
 
 
+class UOTMatcher(nn.Module):
+
+	def __init__(self, *, points_num, nb_iter=5):
+		super().__init__()
+
+		# Mass regularisation
+		self.gamma = nn.Parameter(torch.zeros(1))
+		# Entropic regularisation
+		self.epsilon = nn.Parameter(torch.zeros(1))
+
+	def forward(self, *, src_features, tgt_features, tgt_coords):
+		matching = sinkhorn_unbalanced(src_features=src_features, tgt_features=tgt_features,
+									   epsilon=torch.exp(self.epsilon) + 0.03, gamma=torch.exp(self.gamma))
+
+		matching = normalize_matching(matching)
+		x = matching @ tgt_coords
+
+		return x, matching
+
+
 class Matcher(nn.Module):
 
 	_MATCHER_DICT = {
 		"TFEncMatcher": TFEncMatcher,
 		"TFMLEncMatcher": TFMLEncMatcher,
+		"UOTMatcher": UOTMatcher,
 	}
 
 	def __init__(self, *args, matching_head=None, normalize_matches=True, **kwargs):
