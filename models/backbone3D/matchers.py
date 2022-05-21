@@ -165,7 +165,7 @@ class TFMLEncMatcher(nn.Module):
 
 class UOTMatcher(nn.Module):
 
-	def __init__(self, *, points_num, nb_iter=5):
+	def __init__(self, *, nb_iter=5, **_):
 		super().__init__()
 
 		# Mass regularisation
@@ -173,14 +173,18 @@ class UOTMatcher(nn.Module):
 		# Entropic regularisation
 		self.epsilon = nn.Parameter(torch.zeros(1))
 
+		self.nb_iter = nb_iter
+
 	def forward(self, *, src_features, tgt_features, tgt_coords):
-		matching = sinkhorn_unbalanced(src_features=src_features, tgt_features=tgt_features,
-									   epsilon=torch.exp(self.epsilon) + 0.03, gamma=torch.exp(self.gamma))
+		matching = sinkhorn_unbalanced(src_features=src_features.permute(1, 0, 2),
+									   tgt_features=tgt_features.permute(1, 0, 2),
+									   epsilon=torch.exp(self.epsilon) + 0.03, gamma=torch.exp(self.gamma),
+									   max_iter=self.nb_iter)
 
 		matching = normalize_matching(matching)
-		x = matching @ tgt_coords
+		x = torch.bmm(matching, tgt_coords.permute(1, 0, 2))
 
-		return x, matching
+		return x.permute(1, 0, 2), matching
 
 
 class Matcher(nn.Module):

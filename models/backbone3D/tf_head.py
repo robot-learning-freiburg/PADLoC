@@ -73,6 +73,7 @@ class TFHead(nn.Module):
 		batch_dict['out_rotation'] = None
 		batch_dict['out_translation'] = None
 		batch_dict["sinkhorn_matches"] = tgt_coords_proj
+		batch_dict["conf_weights"] = weights
 
 		if self.compute_inverse_tf:
 			tf2, tgt_coords_proj2, matching2, weights2 = self.mod(src_features=features_positive, src_coords=coords_positive,
@@ -81,5 +82,6 @@ class TFHead(nn.Module):
 			batch_dict['transformation2'] = tf2
 			batch_dict['transport2'] = matching2
 			batch_dict["sinkhorn_matches2"] = tgt_coords_proj2
+			batch_dict["conf_weights2"] = weights2
 
 		return batch_dict

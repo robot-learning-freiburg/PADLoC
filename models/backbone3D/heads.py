@@ -438,6 +438,7 @@ class UOTHead(nn.Module):
 
         batch_dict['sinkhorn_matches'] = sinkhorn_matches
         batch_dict['transport'] = transport
+        batch_dict['conf_weights'] = row_sum
 
         if not self.use_svd:
             x = torch.cat((coords1, sinkhorn_matches, ot_flow), dim=2)
