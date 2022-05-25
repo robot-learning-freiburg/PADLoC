@@ -13,6 +13,8 @@ from pcdet.datasets.kitti.kitti_dataset import KittiDataset
 import random
 
 from scipy.spatial import KDTree
+from scipy.spatial.transform import Rotation
+from scipy.stats import circmean, circstd
 from torch.utils.data.sampler import Sampler, BatchSampler
 from tqdm import tqdm
 
@@ -138,6 +140,22 @@ class BatchSamplePairs(BatchSampler):
                 current_batch.append(self.pairs[self.count+i, 1])
             yield current_batch
 
+
+def rot2aa(rotation):
+    if isinstance(rotation, torch.Tensor):
+        rotation = rotation.numpy()
+
+    r = Rotation.from_matrix(rotation)
+    v = r.as_rotvec()
+
+    angle = np.linalg.norm(v)
+    if angle < 1e-5:
+        # Any arbitrary axis is ok, since the rotation is pretty much 0
+        axis = np.array([1., 0, 0])
+    else:
+        axis = v / angle
+
+    return axis, angle
 
 
 def main_process(gpu, weights_path, args):
@@ -266,6 +284,7 @@ def main_process(gpu, weights_path, args):
         current_frame = 0
         yaw_preds = torch.zeros((len(dataset_for_recall.poses), len(dataset_for_recall.poses)))
         transl_errors = []
+        rot_errors = []
         for batch_idx, sample in enumerate(tqdm(RecallLoader)):
             if batch_idx==1:
                 time_net.reset()
@@ -319,6 +338,7 @@ def main_process(gpu, weights_path, args):
                 batch_dict = model(model_in, metric_head=True)
                 torch.cuda.synchronize()
                 time_net.toc()
+                pred_transf = []
                 pred_transl = []
                 yaw = batch_dict['out_rotation']
 
@@ -345,6 +365,7 @@ def main_process(gpu, weights_path, args):
                     transformation = transformation.inverse()
                     for i in range(batch_dict['batch_size'] // 2):
                         yaw_preds[test_pair_idxs[current_frame+i, 0], test_pair_idxs[current_frame+i, 1]] = mat2xyzrpy(transformation[i])[-1].item()
+                        pred_transf.append(transformation[i].inverse().detach().cpu())
                         pred_transl.append(transformation[i][:3, 3].detach().cpu())
                 elif args.ransac:
                     coords = batch_dict['point_coords'].view(batch_dict['batch_size'], -1, 4)
@@ -415,6 +436,7 @@ def main_process(gpu, weights_path, args):
                             transformation = torch.tensor(result2.transformation.copy())
                         yaw_preds[test_pair_idxs[current_frame + i, 0], test_pair_idxs[current_frame + i, 1]] = \
                             mat2xyzrpy(transformation)[-1].item()
+                        pred_transf.append(transformation.detach().cpu())
                         pred_transl.append(transformation[:3, 3].detach().cpu())
                 for i in range(batch_dict['batch_size'] // 2):
                     pose1 = dataset_for_recall.poses[test_pair_idxs[current_frame+i, 0]]
@@ -422,6 +444,12 @@ def main_process(gpu, weights_path, args):
                     delta_pose = np.linalg.inv(pose1) @ pose2
                     transl_error = torch.tensor(delta_pose[:3, 3]) - pred_transl[i]
                     transl_errors.append(transl_error.norm())
+                    rel_pose_err = np.matmul(delta_pose, pred_transf[i].numpy())
+                    rel_pose_tra_err = rel_pose_err[:3, 3]  # Just for comparison with transl_error
+                    rel_pose_rot_err_mat = rel_pose_err[:3, :3]
+                    rel_pose_rot_err_ax, rel_pos_rot_err_ang = rot2aa(rel_pose_rot_err_mat)
+                    rel_pose_rot_err_ang = np.abs(rel_pos_rot_err_ang) % (2 * np.pi)
+                    rot_errors.append(rel_pose_rot_err_ang)
 
                     yaw_pred = yaw_preds[test_pair_idxs[current_frame+i, 0], test_pair_idxs[current_frame+i, 1]]
                     yaw_pred = yaw_pred % (2 * np.pi)
@@ -453,12 +481,24 @@ def main_process(gpu, weights_path, args):
 
     transl_errors = np.array(transl_errors)
     yaw_error = np.array(yaw_error)
-    print("Mean rotation error: ", yaw_error.mean())
-    print("Median rotation error: ", np.median(yaw_error))
-    print("STD rotation error: ", yaw_error.std())
-    print("Mean translation error: ", transl_errors.mean())
-    print("Median translation error: ", np.median(transl_errors))
-    print("STD translation error: ", transl_errors.std())
+    rot_errors = np.array(rot_errors)
+
+    yaw_mean = yaw_error.mean()
+    yaw_median = np.median(yaw_error)
+    yaw_std = yaw_error.std()
+    tra_mean = transl_errors.mean()
+    tra_median = np.median(transl_errors)
+    tra_std = transl_errors.std()
+    rot_mean = circmean(rot_errors) * 180. / np.pi
+    rot_std = circstd(rot_errors) * 180. / np.pi
+    print("Mean yaw error: ", yaw_mean)
+    print("Median yaw error: ", yaw_median)
+    print("STD yaw error: ", yaw_std)
+    print("Mean rotation error: ", rot_mean)
+    print("STD rotation error: ", rot_std)
+    print("Mean translation error: ", tra_mean)
+    print("Median translation error: ", tra_median)
+    print("STD translation error: ", tra_std)
 
     valid = yaw_error <= 5.
     valid = valid & (np.array(transl_errors) <= 2.)
@@ -468,28 +508,40 @@ def main_process(gpu, weights_path, args):
 
     print(f"Success Rate: {succ_rate}, RTE: {rte_suc}, RRE: {rre_suc}")
 
-    if args.save:
-        save_dict = {
-            'rot': yaw_error,
-            'transl': transl_errors,
-            "success_rate": succ_rate,
-            "RTE": rte_suc,
-            "RRE": rre_suc
-        }
+    save_dict = {
+        "yaw": yaw_error,
+        "yaw_mean": yaw_mean,
+        "yaw_median": yaw_median,
+        "yaw_std": yaw_std,
+        "rot": rot_errors,
+        "rot_mean": rot_mean,
+        "rot_std": rot_std,
+        "tra": transl_errors,
+        "tra_mean": tra_mean,
+        "tra_std": tra_std,
+        "tra_median": tra_median,
+        "success_rate": succ_rate,
+        "RTE": rte_suc,
+        "RRE": rre_suc
+    }
 
-        save_path = f'./evaluation_results/lcdnet00+08_{exp_cfg["test_sequence"]}'
-        # if '360' in weights_path:
+    if args.save:
+        # save_path = f'./evaluation_results/lcdnet00+08_{exp_cfg["test_sequence"]}'
+        save_path = args.save
+        # if  '360' in weights_path:
         #     save_path = f'./results_for_paper/lcdnet++_{exp_cfg["test_sequence"]}'
         # else:
         #     save_path = f'./results_for_paper/lcdnet_{exp_cfg["test_sequence"]}'
-        if args.icp:
-            save_path = save_path+'_icp'
-        elif args.ransac:
-            save_path = save_path+'_ransac'
+        # if args.icp:
+        #     save_path = save_path+'_icp'
+        # elif args.ransac:
+        #     save_path = save_path+'_ransac'
 
         print("Saving to ", save_path)
         with open(f'{save_path}.pickle', 'wb') as f:
             pickle.dump(save_dict, f)
+
+    return save_dict
 
 
 if __name__ == '__main__':
@@ -501,7 +553,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='kitti')
     parser.add_argument('--ransac', action='store_true', default=False)
     parser.add_argument('--icp', action='store_true', default=False)
-    parser.add_argument('--save', action='store_true', default=False)
+    parser.add_argument('--save', default="")
     args = parser.parse_args()
 
     # if args.device is not None and not args.no_cuda:
