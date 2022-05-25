@@ -1,7 +1,7 @@
 import torch
 
 
-def shannon_entropy(p, dim=-1, **_):
+def shannon_entropy(p, dim=-1, epsilon=1e-6, **_):
 	"""
 	TODO: DOC
 	:param p: Tensor of probabilities in [0, 1]
@@ -9,7 +9,9 @@ def shannon_entropy(p, dim=-1, **_):
 
 	:return:
 	"""
-	return - (p * p.log()).sum(dim=dim)
+	logp = (p + epsilon).log()
+	entropy = - (p * logp)
+	return entropy.sum(dim=dim)
 
 
 def hill_number(p, order=1, dim=-1, **_):
