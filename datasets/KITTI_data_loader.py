@@ -404,6 +404,152 @@ class KITTILoaderRGBPoses(Dataset):
         return sample
 
 
+class KITTILoader3DDictSingle(Dataset):
+    """KITTI ODOMETRY DATASET"""
+
+    def __init__(self, dir, sequence, poses, npoints, device, **kwargs):
+        #without_ground=False, loop_file='loop_GT', jitter=False,
+        #         use_semantic=False, use_panoptic=False, use_logits=True):
+        """
+
+        :param dataset: directory where dataset is located
+        :param sequence: KITTI sequence
+        :param poses: csv with data poses
+        """
+
+        super(KITTILoader3DDictSingle, self).__init__()
+
+        self.jitter = kwargs.get("jitter", False)
+        self.dir = dir
+        self.sequence = int(sequence)
+        self.use_semantic = kwargs.get("use_semantic", False)
+        self.use_panoptic = kwargs.get("use_panoptic", False)
+        self.use_logits = kwargs.get("use_logits", False)
+        self.filter_dynamic = kwargs.get("filter_dynamic", False)
+        self.dynamic_classes = kwargs.get("dynamic_classes")
+        data = read_calib_file(os.path.join(dir, 'sequences', sequence, 'calib.txt'))
+        cam0_to_velo = np.reshape(data['Tr'], (3, 4))
+        cam0_to_velo = np.vstack([cam0_to_velo, [0, 0, 0, 1]])
+        cam0_to_velo = torch.tensor(cam0_to_velo)
+        poses2 = []
+        with open(poses, 'r') as f:
+            for x in f:
+                x = x.strip().split()
+                x = [float(v) for v in x]
+                pose = torch.zeros((4, 4), dtype=torch.float64)
+                pose[0, 0:4] = torch.tensor(x[0:4])
+                pose[1, 0:4] = torch.tensor(x[4:8])
+                pose[2, 0:4] = torch.tensor(x[8:12])
+                pose[3, 3] = 1.0
+                pose = cam0_to_velo.inverse() @ (pose @ cam0_to_velo)
+                poses2.append(pose.float().numpy())
+        self.poses = poses2
+        self.npoints = npoints
+        self.device = device
+        self.without_ground = kwargs.get("without_ground", False)
+        # self.loop_file = kwargs.get("loop_file") or "loop_GT"
+        # gt_file = os.path.join(dir, 'sequences', sequence, f'{self.loop_file}.pickle')
+        # with open(gt_file, 'rb') as f:
+        #     self.loop_gt = pickle.load(f)
+        # self.have_matches = []
+        # for i in range(len(self.loop_gt)):
+        #     self.have_matches.append(self.loop_gt[i]['idx'])
+
+        self.superclass_mapper = SemanticSuperclassMapper(cfg_file=kwargs.get("superclass_cfg_file"))
+
+    def __len__(self):
+        return len(self.poses)
+
+    def __getitem__(self, idx):
+
+        if idx >= len(self.poses):
+            print(f"ERRORE: sequence {self.sequence}, frame idx {idx} ")
+
+        if self.use_panoptic or self.use_semantic or self.filter_dynamic:
+            anchor_pcd, anchor_logits = get_velo_with_panoptic(idx, self.dir, self.sequence,
+                                                               use_semantic=self.use_semantic,
+                                                               use_panoptic=self.use_panoptic,
+                                                               jitter=self.jitter,
+                                                               use_logits=self.use_logits,
+                                                               filter_dynamic=self.filter_dynamic,
+                                                               dynamic_classes=self.dynamic_classes)
+            anchor_pcd = torch.from_numpy(anchor_pcd)
+
+            #Random permute points
+            random_permute = torch.randperm(anchor_pcd.shape[0])
+            anchor_pcd = anchor_pcd[random_permute]
+
+            anchor_logits_dict = unpack_logits(anchor_logits, self.use_logits, self.superclass_mapper, "anchor",
+                                               random_permute)
+
+        else:
+            anchor_pcd = torch.from_numpy(get_velo(idx, self.dir, self.sequence, self.without_ground, self.jitter))
+
+            #Random permute points
+            random_permute = torch.randperm(anchor_pcd.shape[0])
+            anchor_pcd = anchor_pcd[random_permute]
+
+        anchor_pose = self.poses[idx]
+        anchor_transl = torch.tensor(anchor_pose[:3, 3], dtype=torch.float32)
+
+        # positive_idx = np.random.choice(self.loop_gt[idx]['positive_idxs'])
+
+        # if self.use_panoptic or self.use_semantic or self.filter_dynamic:
+        #     positive_pcd, positive_logits = get_velo_with_panoptic(positive_idx, self.dir, self.sequence,
+        #                                                            use_semantic=self.use_semantic,
+        #                                                            use_panotpic=self.use_panoptic,
+        #                                                            jitter=self.jitter,
+        #                                                            use_logits=self.use_logits,
+        #                                                            filter_dynamic=self.filter_dynamic,
+        #                                                            dynamic_classes=self.dynamic_classes)
+        #     positive_pcd = torch.from_numpy(positive_pcd)
+        #
+        #     #Random permute points
+        #     random_permute = torch.randperm(positive_pcd.shape[0])
+        #     positive_pcd = positive_pcd[random_permute]
+        #
+        #     positive_logits_dict = unpack_logits(positive_logits, self.use_logits, self.superclass_mapper, "positive",
+        #                                          random_permute)
+        # else:
+        #     positive_pcd = torch.from_numpy(get_velo(positive_idx, self.dir, self.sequence, self.without_ground, self.jitter))
+        #
+        #     #Random permute points
+        #     random_permute = torch.randperm(positive_pcd.shape[0])
+        #     positive_pcd = positive_pcd[random_permute]
+        #
+        #
+        # if positive_idx >= len(self.poses):
+        #     print(f"ERRORE: sequence {self.sequence}, positive idx {positive_idx} ")
+        # positive_pose = self.poses[positive_idx]
+        # positive_transl = torch.tensor(positive_pose[:3, 3], dtype=torch.float32)
+
+        r_anch = anchor_pose
+        # r_pos = positive_pose
+        r_anch = RT.npto_XYZRPY(r_anch)[3:]
+        # r_pos = RT.npto_XYZRPY(r_pos)[3:]
+
+        anchor_rot_torch = torch.tensor(r_anch.copy(), dtype=torch.float32)
+        # positive_rot_torch = torch.tensor(r_pos.copy(), dtype=torch.float32)
+
+        sample = {'anchor': anchor_pcd,
+                  # 'positive': positive_pcd,
+                  'sequence': self.sequence,
+                  'anchor_pose': anchor_transl,
+                  # 'positive_pose': positive_transl,
+                  'anchor_rot': anchor_rot_torch,
+                  # 'positive_rot': positive_rot_torch,
+                  'anchor_idx': idx,
+                  # 'positive_idx': positive_idx
+                  }
+
+        if self.use_panoptic or self.use_semantic:
+            sample.update(anchor_logits_dict)
+            # sample.update(positive_logits_dict)
+            sample.update(self.superclass_mapper.one_hot_maps)
+
+        return sample
+
+
 class KITTILoader3DDictPairs(Dataset):
     """KITTI ODOMETRY DATASET"""
 
