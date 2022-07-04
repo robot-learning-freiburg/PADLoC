@@ -83,7 +83,7 @@ class DeepClosestPointHead(nn.Module):
 
 
 		batch_dict['transport'] = attn_matrix
-		batch_dict['sinkhorn_matches'] = tgt_coords
+		batch_dict['sinkhorn_matches'] = tgt_coords.permute(0, 2, 1)
 
 		batch_dict['transformation'] = transform_ab
 		batch_dict['out_rotation'] = None
