@@ -48,7 +48,7 @@ class PVRCNN(nn.Module):
                  use_semantic=False, use_panoptic=False):
         super(PVRCNN, self).__init__()
         point_cloud_range = np.array(model_cfg.DATA_CONFIG.POINT_CLOUD_RANGE)
-        voxel_size = model_cfg.DATA_CONFIG.DATA_PROCESSOR[2]['VOXEL_SIZE']
+        voxel_size = model_cfg.DATA_CONFIG.DATA_PROCESSOR[-1]['VOXEL_SIZE']
         grid_size = (point_cloud_range[3:6] - point_cloud_range[0:3]) / np.array(voxel_size)
         # print(grid_size.astype(np.int64))
         norm_fn = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
