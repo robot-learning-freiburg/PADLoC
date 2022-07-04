@@ -87,6 +87,7 @@ class KITTILoader3DPosesOnlyLoopPositives(Dataset):
 
 if __name__ == '__main__':
     base_dir = "/home/arceyd/MasterThesis/dat/kitti/dataset"
+    base_dir = "/Users/Jose/Documents/Homeworks/06 M.Sc. Informatik/Master Thesis in RL Chair/Data/KITTI/"
     sequence = "00"
     for sequence in ["00", "03", "04", "05", "06", "07", "08", "09"]:
         # poses_file = base_dir + "/sequences/" + sequence + "/poses.csv"

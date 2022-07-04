@@ -14,14 +14,15 @@ import numpy as np
 from evaluation_comparison.plot_styles import Style
 
 
-def plot_linlog(ax, dataframe, style, xlim, xlabel, ylabel, plot_title):
+def plot_linlog(ax, dataframe, style, xlim, xlabel, ylabel, plot_title, log_y=True):
 	ax.set_prop_cycle(style.cycler_lines)
 	dataframe.plot(ax=ax, legend=None, **style.curves)
 
 	# Main Plot Formatting
-	ax.set_yscale("log")
+	if log_y:
+		ax.set_yscale("log")
+		ax.yaxis.set_minor_locator(LogLocator(subs=(2., 4., 6., 8.,)))
 	ax.yaxis.set_major_formatter(ScalarFormatter())
-	ax.yaxis.set_minor_locator(LogLocator(subs=(2., 4., 6., 8.,)))
 	ax.yaxis.set_minor_formatter(ScalarFormatter())
 	ax.grid(visible=True, which="both", **style.grid)
 	ax.set(xlim=xlim)
@@ -47,6 +48,8 @@ def plot_inset(ax, dataframe, style, xlim, ylim):
 def plot_legends(curve_list, filename, style, expand=None, ncol=4):
 
 	tmp_fig, tmp_ax = plt.subplots()
+	tmp_ax.axis("off")
+
 	tmp_ax.set_prop_cycle(style.cycler_lines)
 
 	handles = [tmp_ax.plot([], [], label=curve)[0] for curve in curve_list]
@@ -72,6 +75,7 @@ def plot_with_inset(*, dataframe,
 					xlabel="Epochs",
 					ylabel="Mean Error",
 					plot_title="Mean Error",
+					log_y=True,
 					do_inset=True,
 					inset_pos=None,
 					inset_mark_loc=(3, 1),
@@ -93,7 +97,7 @@ def plot_with_inset(*, dataframe,
 
 	fig, ax1 = plt.subplots(dpi=style.dpi)
 
-	plot_linlog(ax1, dataframe, style, xlim, xlabel, ylabel, plot_title)
+	plot_linlog(ax1, dataframe, style, xlim, xlabel, ylabel, plot_title, log_y)
 
 	# Zoomed-In Inset
 	# Create a set of inset Axes: these should fill the bounding box allocated to

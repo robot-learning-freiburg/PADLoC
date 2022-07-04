@@ -17,10 +17,10 @@ def eval2latex(file):
 			tra_mean = stat_dict["tra_mean"]
 			tra_std = stat_dict["tra_std"]
 
-		ap = f"\\({stat_dict['success_rate']*100:.2f}\\)"
-		yaw = f"\\({stat_dict['yaw_mean']:.3f} \\pm {stat_dict['yaw_std']:.3f}\\)"
-		rot = f"\\({stat_dict['rot_mean']:.3f} \\pm {stat_dict['rot_std']:.3f}\\)"
-		tra = f"\\({tra_mean:.3f} \\pm {tra_std:.3f}\\)"
+		ap = f"{stat_dict['success_rate']*100:.2f}"
+		yaw = f"{stat_dict['yaw_mean']:.3f} & {stat_dict['yaw_std']:.3f}"
+		rot = f"{stat_dict['rot_mean']:.3f} & {stat_dict['rot_std']:.3f}"
+		tra = f"{tra_mean:.3f} & {tra_std:.3f}"
 
 		row = [
 			key,
@@ -35,5 +35,21 @@ def eval2latex(file):
 		print(line)
 
 
+def main():
+
+	path = "/Users/Jose/Documents/Homeworks/06 M.Sc. Informatik/Master Thesis in RL Chair/res/ablations/"
+
+	files = [
+		"ablation_weight_kitti.pickle",
+		"ablation_losses_kitti.pickle",
+		"final_models_kitti.pickle",
+		"final_models_kitti360.pickle"
+	]
+
+	for file in files:
+		print("\n" * 3 + file)
+		eval2latex(path + file)
+
+
 if __name__ == "__main__":
-	eval2latex("/Users/Jose/Documents/Homeworks/06 M.Sc. Informatik/Master Thesis in RL Chair/res/ablations/ablation_weight_kitti.pickle")
+	main()

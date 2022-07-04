@@ -55,6 +55,12 @@ def main(data_path="/data/arceyd/kitti/", save_path="~/MT/res/",
 			Run("26-05-2022_09-55-19", "Hill, order=2"),
 			Run("26-05-2022_20-52-10", "Hill, order=4"),
 			Run("27-05-2022_07-46-12", "Berger-Parker")
+		],
+		"final_models": [
+			Run("16-09-2021_00-02-34", "lcdnet"),
+			Run("04-04-2022_18-34-14", "dcp"),
+			Run("12-05-2022_10-38-29", "tf"),
+			Run("27-05-2022_19-10-54", "padloc"),
 		]
 	}
 

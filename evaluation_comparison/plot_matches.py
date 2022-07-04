@@ -323,8 +323,8 @@ def plot_matches(*, anc_pc, anc_samp_ids,
 
 	fig = plt.figure(dpi=style.point_cloud_dpi, figsize=(4.1, 5.8))
 	ax = fig.add_subplot()
-	ax.axis('off')
-	ax.set_aspect('equal')
+	ax.axis("off")
+	ax.set_aspect("equal")
 
 	# Plot Anchor Point Cloud
 	ax.scatter(proj_uns_anc_pc[:, 0], proj_uns_anc_pc[:, 1], zorder=1, **style.src_point_cloud)
@@ -368,11 +368,16 @@ def infer_and_plot(*, dataset, device, model, frames, style, image_paths, augmen
 		anc_samp_ids = samples["keypoint_idxs"][i]
 		pos_samp_ids = samples["keypoint_idxs"][batch_size + i]
 
+		if "conf_weights" in samples:
+			conf_weights = samples["conf_weights"][i]
+		else:
+			conf_weights = torch.ones(samples["transport"].shape[1], device=samples["transport"].device)
+
 		plot_matches(anc_pc=samples["anchor"][i], anc_samp_ids=anc_samp_ids,
 					 pos_pc=samples["positive"][i], pos_samp_ids=pos_samp_ids,
 					 p2a_transform=samples["p2a_transform"][i],
 					 pred_pos_pc=samples["sinkhorn_matches"][i],
-					 match_weights=samples["conf_weights"][i],
+					 match_weights=conf_weights,
 					 device=device, style=style,
 					 image_path=image_path,
 					 z_distance=120.)

@@ -62,6 +62,13 @@ class Monochrome:
 		# self.ovr_reg_point_cloud = dict(s=0.1, c="k", marker="o", lw=0)
 		# self.ovr_reg_point_cloud_color = np.array([0., 0., 0.])
 
+		# Loop-Closure detection paths
+		self.path_dpi = 300
+		self.tp = dict(c="0.25", s=4, marker="o", lw=0)
+		self.tn = dict(c="0.75", lw=0.5)
+		self.fp = dict(c="0.0", s=1, marker="X", lw=0)
+		self.fn = dict(c="0.5", s=2, marker="v", lw=0)
+
 	def preprocess_confidence(self, confidence_weights):
 		# Make confidence weights 1D if they are not
 		if len(confidence_weights.shape) > 1:
@@ -76,7 +83,8 @@ class Monochrome:
 
 		if self.match_lines_auto_range:
 			min_w, max_w = confidence_weights.min(), confidence_weights.max()
-			confidence_weights = (confidence_weights - min_w) / (max_w - min_w)
+			if max_w - min_w > 1e-6:
+				confidence_weights = (confidence_weights - min_w) / (max_w - min_w)
 
 		# Convert to numpy
 		confidence_weights = confidence_weights.cpu().numpy()
@@ -229,6 +237,12 @@ class Color(Monochrome):
 		# self.ovr_reg_point_cloud_color = np.array([0., 0.1568627451, 0.3411764706])
 		# self.src_reg_point_cloud = dict(s=0.1, c="#00FF00", marker="o", lw=0)
 		# self.tgt_reg_point_cloud = dict(s=0.1, c="#FF0000", marker="o", lw=0)
+
+		# Loop-Closure detection paths
+		self.tp = dict(c="#1b5a1e", s=3, lw=0)  # Green
+		self.tn = dict(c="0.25", lw=0.5)
+		self.fp = dict(c="#e51009", s=1, lw=0)  # Red
+		self.fn = dict(c="#1d0ad8", s=2, lw=0)  # Blue
 
 	def match_lines_styles(self, confidence_weights):
 

@@ -6,7 +6,7 @@ from evaluation_comparison.plot_exp_log import plot_with_inset
 from evaluation_comparison.plot_styles import Style
 
 Run = namedtuple("run", ["name", "label"])
-Curve = namedtuple("curve", ["title", "label", "units", "smooth_f", "x_lim", "do_inset",
+Curve = namedtuple("curve", ["title", "label", "ylabel", "smooth_f", "x_lim", "log_y", "do_inset",
 							 "inset_x_lim", "inset_y_lim", "plot_runs",
 							 "legend", "legend_cols"])
 
@@ -30,17 +30,18 @@ def main():
 				Run("17/05/2022 00:20:38", "LCDNet+Rev+Pan+Sem+Mse"),
 			],
 			"curves": [
-				Curve("Rotation Mean Error", "rme", "[deg]", 0.8, (1, 150), True, (80, 150), (1.15, 3.75),
+				Curve("Rotation Mean Error", "rme", "Mean Error [deg]", 0.8, (1, 150), True, True, (80, 150), (1.1, 1.4),
 					  ["LCDNet", "LCDNet+Rev", "LCDNet+Rev+Sem", "LCDNet+Rev+Pan+Sem+Mse"],
 					  True, 4),
-				Curve("Translation Error", "tme", "[m]", 0.8, (1, 150), True,  (80, 150), (0.9, 1.55),
+				Curve("Translation Error", "tme", "Mean Error [m]", 0.8, (1, 150), True, True,  (80, 150), (0.9, 1.05),
 					  ["LCDNet", "LCDNet+Rev", "LCDNet+Rev+Sem", "LCDNet+Rev+Pan+Sem+Mse"],
 					  False, 4),
 			]
 		},
 		"LossesAblTF": {
 			"runs": [
-				Run("12/05/2022 10:38:29", "TF"),
+				# Run("12/05/2022 10:38:29", "TF"),-
+				Run("11/06/2022 15:14:00", "TF"),
 				Run("15/05/2022 10:59:41", "TF+Rev"),
 				Run("13/05/2022 18:02:51", "TF+Rev+Sem"),
 				Run("08/05/2022 23:35:45", "TF+Rev+Mse"),
@@ -48,10 +49,10 @@ def main():
 				Run("10/05/2022 13:24:39", "TF+Rev+Pan+Sem+Mse")
 			],
 			"curves": [
-				Curve("Rotation Mean Error", "rme", "[deg]", 0.8, (1, 150), True,  (80, 150), (2.5, 3.75),
+				Curve("Rotation Mean Error", "rme", "Mean Error [deg]", 0.8, (1, 150), True, True,  (80, 150), (2.5, 3.75),
 					  ["TF", "TF+Rev", "TF+Rev+Sem", "TF+Rev+Pan+Sem+Mse"],
 					  True, 4),
-				Curve("Translation Error", "tme", "[m]", 0.8, (1, 150), True,  (80, 150), (1.15, 1.7),
+				Curve("Translation Error", "tme", "Mean Error [m]", 0.8, (1, 150), True, True,  (80, 150), (1.1, 1.6),
 					  ["TF", "TF+Rev", "TF+Rev+Sem", "TF+Rev+Pan+Sem+Mse"],
 					  False, 4),
 			]
@@ -66,18 +67,40 @@ def main():
 				Run("27/05/2022 07:46:12", "Berger-Parker")
 			],
 			"curves": [
-				Curve("Rotation Mean Error", "rme", "[deg]", 0.5, (1, 50), False, None, None,
+				Curve("Rotation Mean Error", "rme", "Mean Error [deg]", 0.5, (1, 50), True, False, None, None,
 					  ["Uniform", "Column Sum", "Shannon", "Hill, order=2", "Hill, order=4", "Berger-Parker"],
 					  True, 3),
-				Curve("Translation Error", "tme", "[m]", 0.5, (1, 50), False, None, None,
+				Curve("Translation Error", "tme", "Mean Error [m]", 0.5, (1, 50), True, False, None, None,
 					  ["Uniform", "Column Sum", "Shannon", "Hill, order=2", "Hill, order=4", "Berger-Parker"],
 					  False, 3),
+
+			]
+		},
+		"FinalModels": {
+			"runs": [
+				Run("16/09/2021 00:02:34", "LCDNet"),
+				Run("04/04/2022 18:34:14", "DCP"),
+				# Run("12/05/2022 10:38:29", "Transf."),
+				Run("11/06/2022 15:14:00", "Transf."),
+				Run("27/05/2022 19:10:54", "PADLoC"),
+			],
+			"curves": [
+				Curve("Rotation Mean Error", "rme", "Mean Error [deg]", 0.5, (1, 150), True, True, (80, 150), (2.4, 3.8),
+					  ["LCDNet", "DCP", "Transf.", "PADLoC"],
+					  True, 4),
+				Curve("Translation Error", "tme", "Mean Error [m]", 0.5, (1, 150), True, True, (80, 150), (1.1, 1.6),
+					  ["LCDNet", "DCP", "Transf.", "PADLoC"],
+					  False, 4),
+				Curve("Real AUC", "auc", "AUC", 0.5, (1, 150), False, False, None, None,
+					  ["LCDNet", "DCP", "Transf.", "PADLoC"],
+					  False, 4),
 
 			]
 		}
 	}
 
-	home_path = Path("~/Documents/Homeworks/06 M.Sc. Informatik/Master Thesis in RL Chair/Master Thesis/shared/")
+	# home_path = Path("~/Documents/Homeworks/06 M.Sc. Informatik/Master Thesis in RL Chair/Master Thesis/shared/")
+	home_path = Path("~/Documents/Homeworks/06 M.Sc. Informatik/Master Thesis in RL Chair/Master Thesis/CoRL Paper/figures")
 	home_path = home_path.expanduser()
 	data_path = home_path / "dat" / "res"
 	img_path = home_path / "img" / "res"
@@ -115,8 +138,9 @@ def main():
 				plot_path = img_path / f"fig_{style.pfx}_{file_prefix}_{curve_cfg.label}.{plot_file_extension}"
 
 				plot_with_inset(dataframe=df, xlim=curve_cfg.x_lim,
-								xlabel="Epochs", ylabel=f"Mean Error {curve_cfg.units}",
+								xlabel="Epochs", ylabel=curve_cfg.ylabel,
 								plot_title="", inset_pos=None, inset_mark_loc=(3, 1),
+								log_y = curve_cfg.log_y,
 								do_inset=curve_cfg.do_inset,
 								inset_xlim=curve_cfg.inset_x_lim, inset_ylim=curve_cfg.inset_y_lim,
 								style=style, save_path=plot_path, show=False,

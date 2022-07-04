@@ -175,8 +175,7 @@ class BatchSamplePairs(BatchSampler):
             yield current_batch
 
 
-
-def main_process(gpu, weights_path, args):
+def main_process(gpu, weights_path, dataset, data, num_iters=1, save_path=None, sequence=None):
     global EPOCH
     rank = gpu
 
@@ -193,21 +192,23 @@ def main_process(gpu, weights_path, args):
 
     current_date = datetime.now()
 
-    if args.dataset == 'kitti':
-        exp_cfg['test_sequence'] = "08"
-        sequences_training = ["00", "03", "04", "05", "06", "07", "08", "09"]  # compulsory data in sequence 10 missing
-    elif args.dataset == 'nclt':
-        exp_cfg['test_sequence'] = "2013-04-05"
-        sequences_training = ["2012-01-08", "2012-01-15", "2012-01-22", "2012-02-04", "2012-03-25",
-                              "2012-03-31", "2012-05-26", "2012-10-28", "2012-11-17", "2012-12-01"]
-    elif args.dataset == 'kitti360':
-        exp_cfg['test_sequence'] = "2013_05_28_drive_0002_sync"
-        sequences_training = ["2013_05_28_drive_0000_sync", "2013_05_28_drive_0002_sync",
-                              "2013_05_28_drive_0004_sync", "2013_05_28_drive_0005_sync",
-                              "2013_05_28_drive_0006_sync", "2013_05_28_drive_0009_sync"]
-    sequences_validation = [exp_cfg['test_sequence']]
-    sequences_training = set(sequences_training) - set(sequences_validation)
-    sequences_training = list(sequences_training)
+    if sequence is None:
+        if dataset == 'kitti':
+            exp_cfg['test_sequence'] = "08"
+            sequences_training = ["00", "03", "04", "05", "06", "07", "08", "09"]  # compulsory data in sequence 10 missing
+        elif dataset == 'nclt':
+            exp_cfg['test_sequence'] = "2013-04-05"
+            sequences_training = ["2012-01-08", "2012-01-15", "2012-01-22", "2012-02-04", "2012-03-25",
+                                  "2012-03-31", "2012-05-26", "2012-10-28", "2012-11-17", "2012-12-01"]
+        elif dataset == 'kitti360':
+            exp_cfg['test_sequence'] = "2013_05_28_drive_0002_sync"
+            sequences_training = ["2013_05_28_drive_0000_sync", "2013_05_28_drive_0002_sync",
+                                  "2013_05_28_drive_0004_sync", "2013_05_28_drive_0005_sync",
+                                  "2013_05_28_drive_0006_sync", "2013_05_28_drive_0009_sync"]
+        sequences_validation = [exp_cfg['test_sequence']]
+        sequences_training = set(sequences_training) - set(sequences_validation)
+        sequences_training = list(sequences_training)
+        sequence = sequences_validation[0]
 
     if 'loop_file' not in exp_cfg:
         exp_cfg['loop_file'] = 'loop_GT'
@@ -224,20 +225,20 @@ def main_process(gpu, weights_path, args):
     if 'head' not in exp_cfg:
         exp_cfg['head'] = 'SuperGlue'
 
-    if args.dataset == 'kitti':
-        dataset_for_recall = KITTILoader3DPoses(args.data, sequences_validation[0],
-                                                os.path.join(args.data, 'sequences', sequences_validation[0],'poses_SEMANTICKITTI.txt'),
+    if dataset == 'kitti':
+        dataset_for_recall = KITTILoader3DPoses(data, sequence,
+                                                os.path.join(data, 'sequences', sequence, 'poses.txt'),
                                                 exp_cfg['num_points'], device, train=False,
                                                 use_semantic=exp_cfg['use_semantic'], use_panoptic=exp_cfg['use_panoptic'],
                                                 without_ground=exp_cfg['without_ground'], loop_file=exp_cfg['loop_file'])
-    elif args.dataset == 'kitti360':
-        dataset_for_recall = KITTI3603DPoses(args.data, sequences_validation[0],
+    elif dataset == 'kitti360':
+        dataset_for_recall = KITTI3603DPoses(data, sequence,
                                              train=False,
                                              without_ground=exp_cfg['without_ground'], loop_file='loop_GT_4m_noneg')
-    elif args.dataset == 'freiburg':
-        dataset_for_recall = FreiburgDataset(args.data, without_ground=exp_cfg['without_ground'])
-    elif args.dataset == 'nclt':
-        dataset_for_recall = NCLTDataset(args.data, sequences_validation[0])
+    elif dataset == 'freiburg':
+        dataset_for_recall = FreiburgDataset(data, without_ground=exp_cfg['without_ground'])
+    elif dataset == 'nclt':
+        dataset_for_recall = NCLTDataset(data, sequence)
 
     dataset_list_valid = [dataset_for_recall]
 
@@ -296,7 +297,7 @@ def main_process(gpu, weights_path, args):
     rot_errors = []
     transl_errors = []
     time_descriptors = []
-    for i in range(args.num_iters):
+    for i in range(num_iters):
         rot_errors.append([])
         transl_errors.append([])
 
@@ -358,7 +359,8 @@ def main_process(gpu, weights_path, args):
 
     emb_list_map_norm = emb_list_map / np.linalg.norm(emb_list_map, axis=1, keepdims=True)
     pair_dist = faiss.pairwise_distances(emb_list_map_norm, emb_list_map_norm)
-    # np.savez(f'pairs_dist_ours_nclt_{exp_cfg["test_sequence"]}_trained360-02.npz', pair_dist)
+    if save_path:
+        np.savez(save_path, pair_dist)
     poses = np.stack(dataset_for_recall.poses)
     precision_ours_fn, recall_ours_fn, precision_ours_fp, recall_ours_fp = compute_PR(pair_dist, poses, map_tree_poses)
     ap_ours_fp = compute_AP(precision_ours_fp, recall_ours_fp)
@@ -560,6 +562,7 @@ if __name__ == '__main__':
     parser.add_argument('--weights_path', default='/home/cattaneo/checkpoints/deep_lcd')
     parser.add_argument('--num_iters', type=int, default=1)
     parser.add_argument('--dataset', type=str, default='kitti')
+    parser.add_argument('--save_path', type=str, default=None)
     args = parser.parse_args()
 
-    main_process(0, args.weights_path, args)
+    main_process(0, **vars(args))
