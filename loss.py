@@ -146,15 +146,15 @@ def rpm_loss_for_rpmnet(points_src, transformations, delta_pose, **_):
 
 
 def _get_normalized_matching(batch_dict, pos2anc=True):
-    pos2anc_key = "norm_match_p2a"
-    anc2pos_key = "norm_match_a2p"
+    pos2anc_key, pos2anc_batch_key = "norm_match_p2a", "transport"
+    anc2pos_key, anc2pos_batch_key = "norm_match_a2p", "transport2"
     match_key = pos2anc_key if pos2anc else anc2pos_key
+    batch_key = pos2anc_batch_key if pos2anc else anc2pos_batch_key
 
     if match_key in batch_dict:
         return batch_dict[match_key]
 
-    batch_dict[pos2anc_key] = normalize_matching(batch_dict["transport"])
-    batch_dict[anc2pos_key] = normalize_matching(batch_dict["transport2"])
+    batch_dict[match_key] = normalize_matching(batch_dict[batch_key])
 
     return batch_dict[match_key]
 
