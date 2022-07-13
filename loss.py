@@ -146,10 +146,7 @@ def rpm_loss_for_rpmnet(points_src, transformations, delta_pose, **_):
 
 
 def _get_normalized_matching(batch_dict, pos2anc=True):
-    pos2anc_key, pos2anc_batch_key = "norm_match_p2a", "transport"
-    anc2pos_key, anc2pos_batch_key = "norm_match_a2p", "transport2"
-    match_key = pos2anc_key if pos2anc else anc2pos_key
-    batch_key = pos2anc_batch_key if pos2anc else anc2pos_batch_key
+    match_key, batch_key = ("norm_match_p2a", "transport") if pos2anc else ("norm_match_a2p", "transport2")
 
     if match_key in batch_dict:
         return batch_dict[match_key]
@@ -166,8 +163,7 @@ def _remap_label(value, mapping_dict: Optional[Dict[int, int]] = None):
     remapped_value = torch.zeros_like(value, dtype=value.dtype, device=value.device)
 
     for src, tgt in mapping_dict.items():
-        idx = torch.nonzero(value == src)
-        remapped_value[idx] = tgt
+        remapped_value[value == src] = tgt
 
     return remapped_value
 
