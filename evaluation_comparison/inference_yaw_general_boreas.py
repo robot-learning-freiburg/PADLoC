@@ -163,6 +163,7 @@ def main_process(gpu, weights_path, *,
 	saved_params = torch.load(weights_path, map_location='cpu')
 	exp_cfg = saved_params['config']
 	exp_cfg['batch_size'] = batch_size
+	exp_cfg["pvrcnn_cfg_file"] = "./models/backbone3D/pv_rcnn_boreas.yaml"
 
 	if 'loop_file' not in exp_cfg:
 		exp_cfg['loop_file'] = 'loop_GT'
@@ -546,4 +547,4 @@ if __name__ == '__main__':
 	#     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 	#     os.environ["CUDA_VISIBLE_DEVICES"] = args.device
 
-	main_process(0)
+	main_process(**vars(tmp_args))

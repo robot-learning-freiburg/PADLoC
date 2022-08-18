@@ -275,6 +275,7 @@ def main_process(gpu, weights_path, common_seed, world_size, dataset_path,
 	# exp_cfg = saved_params['config']
 	exp_cfg = saved_params['config']
 	exp_cfg['batch_size'] = batch_size
+	exp_cfg["pvrcnn_cfg_file"] = "./models/backbone3D/pv_rcnn_boreas.yaml"
 
 	if 'loop_file' not in exp_cfg:
 		exp_cfg['loop_file'] = 'loop_GT'
@@ -492,9 +493,9 @@ def main_process(gpu, weights_path, common_seed, world_size, dataset_path,
 		pair_dist = faiss.pairwise_distances(emb_list_map_norm, emb_list_map_norm3)
 
 		if pr_filename:
+			print(f"Saving pairwise distances to {pr_filename}.")
 			np.savez(pr_filename, pair_dist)
 
-		#poses = np.stack(dataset_for_recall1.poses)
 		precision_ours_fn, recall_ours_fn, precision_ours_fp, recall_ours_fp = compute_PR_mulran(pair_dist, dataset_for_recall1.poses, dataset_for_recall3.poses)
 		ap_ours_fp = compute_AP(precision_ours_fp, recall_ours_fp)
 		ap_ours_fn = compute_AP(precision_ours_fn, recall_ours_fn)
@@ -502,11 +503,23 @@ def main_process(gpu, weights_path, common_seed, world_size, dataset_path,
 		print(exp_cfg['test_sequence'])
 		print("AP FP: ", ap_ours_fp)
 		print("AP FN: ", ap_ours_fn)
-		precision_pair_ours, recall_pair_ours = compute_PR_pairs(pair_dist, poses)
-		precision_pair_ours = [x for _, x in sorted(zip(recall_pair_ours, precision_pair_ours))]
-		recall_pair_ours = sorted(recall_pair_ours)
-		ap_ours_pair = compute_AP(precision_pair_ours, recall_pair_ours)
-		print("AP Pairs: ", ap_ours_pair)
+		# poses = np.concatenate([dataset_for_recall1.poses, dataset_for_recall3.poses])
+		# precision_pair_ours, recall_pair_ours = compute_PR_pairs(pair_dist, poses)
+		# precision_pair_ours = [x for _, x in sorted(zip(recall_pair_ours, precision_pair_ours))]
+		# recall_pair_ours = sorted(recall_pair_ours)
+		# ap_ours_pair = compute_AP(precision_pair_ours, recall_pair_ours)
+		# print("AP Pairs: ", ap_ours_pair)
+
+		if stats_filename:
+			save_dict = {
+				"AP FP": ap_ours_fp,
+				"AP FN": ap_ours_fn,
+				# "AP Pairs": ap_ours_pair
+			}
+
+			print(f"Saving Stats to {stats_filename}.")
+			with open(stats_filename, "wb") as f:
+				pickle.dump(save_dict, f)
 
 		print("Done")
 
@@ -520,9 +533,13 @@ if __name__ == '__main__':
 	parser.add_argument('--weights_path', default='/home/cattaneo/checkpoints/deep_lcd')
 	parser.add_argument('--num_iters', type=int, default=1)
 	parser.add_argument('--batch_size', type=int, default=15)
-	parser.add_argument('--dataset', type=str, default='mulran')
+	parser.add_argument('--dataset', type=str, default='boreas')
+	parser.add_argument('--seq1', type=str, default=None)
+	parser.add_argument('--seq2', type=str, default=None)
 	parser.add_argument("--common_seed", type=int, default=42)
 	parser.add_argument("--gpu_count", type=int, default=def_gpu_count)
+	parser.add_argument("--pr_filename", type=str, default=None)
+	parser.add_argument("--stats_filename", type=str, default=None)
 	args = parser.parse_args()
 
 	os.environ['MASTER_ADDR'] = 'localhost'
@@ -530,5 +547,6 @@ if __name__ == '__main__':
 
 	args.gpu_count = torch.cuda.device_count()
 	mp.spawn(main_process, nprocs=args.gpu_count, args=(
-		args.weights_path, 42, args.gpu_count, args.data, args.dataset, None, None, args.num_iter, args.batch_size
+		args.weights_path, 42, args.gpu_count, args.data, args.dataset, args.seq1, args.seq2, args.num_iter,
+		args.batch_size, args.pr_filename, args.stats_filename
 	))
