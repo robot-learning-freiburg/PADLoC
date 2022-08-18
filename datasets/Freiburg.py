@@ -14,7 +14,7 @@ import utils.rotation_conversion as RT
 
 
 class FreiburgDataset(Dataset):
-    def __init__(self, base_folder, without_ground=False):
+    def __init__(self, base_folder, without_ground=False, z_offset=0.283):
         super(FreiburgDataset, self).__init__()
         self.base_folder = base_folder
         self.without_ground = without_ground
@@ -22,6 +22,7 @@ class FreiburgDataset(Dataset):
         self.all_files = sorted(self.all_files)
         # self.files_with_gt = []
         self.poses = []
+        self.z_offset = z_offset
         for i in tqdm(range(len(self.all_files))):
             path = os.path.join(self.base_folder, 'gps_aligned', self.all_files[i])
             pose = np.eye(4)
@@ -44,6 +45,10 @@ class FreiburgDataset(Dataset):
                 scan = hf['PC'][:]
             scan = scan.reshape((-1, 4))
         # scan[:, 2] -= 0.55  # TEST
+
+        if self.z_offset:
+            scan[:, 2] += self.z_offset
+
         return scan
 
     def __len__(self):

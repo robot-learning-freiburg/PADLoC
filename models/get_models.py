@@ -1,5 +1,8 @@
+from collections import OrderedDict
+
 from pcdet.config import cfg_from_yaml_file
 from pcdet.config import cfg as pvrcnn_cfg
+import torch
 
 #from models.backbone2D import models_2d as mdl2d
 #from models.backbone2D.originalNetvlad import vd16_tokyoTM_conv5_3_max_dag, weights_init
@@ -93,7 +96,8 @@ def get_model(exp_cfg, is_training=True):
                            rotation_parameters=rotation_parameters, sinkhorn_iter=exp_cfg['sinkhorn_iter'],
                            use_svd=exp_cfg['use_svd'], sinkhorn_type=exp_cfg['sinkhorn_type'])
         elif exp_cfg['3D_net'] == 'PVRCNN':
-            cfg_from_yaml_file('./models/backbone3D/pv_rcnn.yaml', pvrcnn_cfg)
+            pvrcnn_cfg_file = exp_cfg.get("pvrcnn_cfg_file", "./models/backbone3D/pv_rcnn.yaml")
+            cfg_from_yaml_file(pvrcnn_cfg_file, pvrcnn_cfg)
             pvrcnn_cfg.MODEL.PFE.NUM_KEYPOINTS = exp_cfg['num_points']
             pvrcnn_cfg.MODEL.PFE.NUM_OUTPUT_FEATURES = exp_cfg['feature_size']
             if 'PC_RANGE' in exp_cfg:
@@ -122,3 +126,37 @@ def get_model(exp_cfg, is_training=True):
     else:
         raise TypeError("Unknown training mod")
     return model
+
+
+def load_model(weights_path, override_cfg_dict=None):
+
+    saved_params = torch.load(weights_path, map_location='cpu')
+
+    exp_cfg = saved_params['config']
+
+    if override_cfg_dict is not None:
+        exp_cfg.update(override_cfg_dict)
+
+    model = get_model(exp_cfg, is_training=False)
+
+    renamed_dict = OrderedDict()
+    for key in saved_params['state_dict']:
+        if not key.startswith('module'):
+            renamed_dict = saved_params['state_dict']
+            break
+        else:
+            renamed_dict[key[7:]] = saved_params['state_dict'][key]
+
+    # Reshape weights to account for differences in implementation between OpenPCDet versions
+    if renamed_dict['backbone.backbone.conv_input.0.weight'].shape != \
+            model.state_dict()['backbone.backbone.conv_input.0.weight'].shape:
+        for key in renamed_dict:
+            if key.startswith('backbone.backbone.conv') and key.endswith('weight'):
+                if len(renamed_dict[key].shape) == 5:
+                    renamed_dict[key] = renamed_dict[key].permute(-1, 0, 1, 2, 3)
+
+    res = model.load_state_dict(renamed_dict, strict=False)
+    if len(res[0]) > 0:
+        print(f"WARNING: MISSING {len(res[0])} KEYS, MAYBE WEIGHTS LOADING FAILED")
+
+    return model, exp_cfg

@@ -52,8 +52,8 @@ def plot_path(poses, tp, fp, fn, style, save_path=None, save_stats=True, do_plot
 	fn_indexes = np.nonzero(fn)[0] + 100
 	tp_indexes = np.nonzero(tp)[0] + 100
 
-	h2 = ax.scatter(poses[fp_indexes, 0, 3], poses[fp_indexes, 1, 3], zorder=4, **style.fp)
-	h3 = ax.scatter(poses[fn_indexes, 0, 3], poses[fn_indexes, 1, 3], zorder=3, **style.fn)
+	# h2 = ax.scatter(poses[fp_indexes, 0, 3], poses[fp_indexes, 1, 3], zorder=4, **style.fp)
+	# h3 = ax.scatter(poses[fn_indexes, 0, 3], poses[fn_indexes, 1, 3], zorder=3, **style.fn)
 	h4 = ax.scatter(poses[tp_indexes, 0, 3], poses[tp_indexes, 1, 3], zorder=2, **style.tp)
 
 	if save_stats:

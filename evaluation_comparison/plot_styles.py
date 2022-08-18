@@ -101,7 +101,7 @@ class Monochrome:
 
 		return confidence_weights
 
-	def match_lines_styles(self, confidence_weights):
+	def match_lines_styles(self, confidence_weights, geometric_accuracy):
 
 		confidence_weights = self.preprocess_confidence(confidence_weights)
 
@@ -239,21 +239,28 @@ class Color(Monochrome):
 		# self.tgt_reg_point_cloud = dict(s=0.1, c="#FF0000", marker="o", lw=0)
 
 		# Loop-Closure detection paths
-		self.tp = dict(c="#1b5a1e", s=3, lw=0)  # Green
+		self.tp = dict(c="#00bf00", s=8, lw=0)  # Green
 		self.tn = dict(c="0.25", lw=0.5)
-		self.fp = dict(c="#e51009", s=1, lw=0)  # Red
-		self.fn = dict(c="#1d0ad8", s=2, lw=0)  # Blue
+		self.fp = dict(c="#bf0000", s=4, lw=0)  # Red
+		self.fn = dict(c="#0000bf", s=6, lw=0)  # Blue
 
-	def match_lines_styles(self, confidence_weights):
+	def match_lines_styles(self, confidence_weights, geometric_accuracy=None):
 
 		confidence_weights = self.preprocess_confidence(confidence_weights)
 
 		linewidths = self.match_lines_lw_range * confidence_weights + self.match_lines_min_lw
 		alphas = self.match_lines_alpha_range * confidence_weights + self.match_lines_min_alpha
 
-		cm = plt.cm.get_cmap("YlOrRd")
+		if geometric_accuracy is None:
+			cm = plt.cm.get_cmap("YlOrRd")
+			colors = cm(confidence_weights)
+		else:
+			colors = np.zeros((confidence_weights.shape[0], 4))
+			color_right = [0., 0.75, 0., 0.]
+			color_wrong = [0.75, 0., 0., 0.]
 
-		colors = cm(confidence_weights)
+			colors[geometric_accuracy] = color_right
+			colors[np.logical_not(geometric_accuracy)] = color_wrong
 		colors[:, 3] = alphas
 
 		return dict(linewidths=linewidths, colors=colors)

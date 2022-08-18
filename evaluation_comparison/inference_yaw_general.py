@@ -158,7 +158,7 @@ def rot2aa(rotation):
     return axis, angle
 
 
-def main_process(gpu, weights_path, args):
+def main_process(gpu, weights_path, dataset, data, sequence=None, num_iters=1, ransac=False, icp=False, save_path=None):
     global EPOCH
     rank = gpu
 
@@ -186,27 +186,29 @@ def main_process(gpu, weights_path, args):
 
     current_date = datetime.now()
 
-    if args.dataset == 'kitti':
-        exp_cfg['test_sequence'] = "08"
-        sequences_training = ["00", "03", "04", "05", "06", "07", "08", "09"]  # compulsory data in sequence 10 missing
-    else:
-        exp_cfg['test_sequence'] = "2013_05_28_drive_0009_sync"
-        sequences_training = ["2013_05_28_drive_0000_sync", "2013_05_28_drive_0002_sync",
-                              "2013_05_28_drive_0004_sync", "2013_05_28_drive_0005_sync",
-                              "2013_05_28_drive_0006_sync", "2013_05_28_drive_0009_sync"]
-    sequences_validation = [exp_cfg['test_sequence']]
-    sequences_training = set(sequences_training) - set(sequences_validation)
-    sequences_training = list(sequences_training)
-    exp_cfg['sinkhorn_iter'] = 5
+    if sequence is None:
+        if dataset == 'kitti':
+            exp_cfg['test_sequence'] = "08"
+            sequences_training = ["00", "03", "04", "05", "06", "07", "08", "09"]  # compulsory data in sequence 10 missing
+        else:
+            exp_cfg['test_sequence'] = "2013_05_28_drive_0009_sync"
+            sequences_training = ["2013_05_28_drive_0000_sync", "2013_05_28_drive_0002_sync",
+                                  "2013_05_28_drive_0004_sync", "2013_05_28_drive_0005_sync",
+                                  "2013_05_28_drive_0006_sync", "2013_05_28_drive_0009_sync"]
+        sequences_validation = [exp_cfg['test_sequence']]
+        sequences_training = set(sequences_training) - set(sequences_validation)
+        sequences_training = list(sequences_training)
+        exp_cfg['sinkhorn_iter'] = 5
+        sequence = sequences_validation[0]
 
-    if args.dataset == 'kitti':
-        dataset_for_recall = KITTILoader3DPoses(args.data, sequences_validation[0],
-                                                os.path.join(args.data, 'sequences',
-                                                             sequences_validation[0], 'poses.txt'),
+    if dataset == 'kitti':
+        dataset_for_recall = KITTILoader3DPoses(data, sequence,
+                                                os.path.join(data, 'sequences',
+                                                             sequence, 'poses.txt'),
                                                 exp_cfg['num_points'], device, train=False,
                                                 without_ground=exp_cfg['without_ground'], loop_file=exp_cfg['loop_file'])
     else:
-        dataset_for_recall = KITTI3603DPoses(args.data, sequences_validation[0],
+        dataset_for_recall = KITTI3603DPoses(data, sequence,
                                              train=False,
                                              without_ground=exp_cfg['without_ground'], loop_file='loop_GT_4m_noneg')
 
@@ -270,7 +272,7 @@ def main_process(gpu, weights_path, args):
     rot_errors = []
     transl_errors = []
     yaw_error = []
-    for i in range(args.num_iters):
+    for i in range(num_iters):
         rot_errors.append([])
         transl_errors.append([])
 
@@ -290,11 +292,11 @@ def main_process(gpu, weights_path, args):
                 time_net.reset()
                 time_ransac.reset()
                 time_icp.reset()
-            if batch_idx % 10 == 9:
-                print("")
-                print("Time Network: ", time_net.avg)
-                print("Time RANSAC: ", time_ransac.avg)
-                print("Time ICP: ", time_icp.avg)
+            # if batch_idx % 10 == 9:
+            #     print("")
+            #     print("Time Network: ", time_net.avg)
+            #     print("Time RANSAC: ", time_ransac.avg)
+            #     print("Time ICP: ", time_icp.avg)
 
             start_time = time.time()
 
@@ -358,7 +360,7 @@ def main_process(gpu, weights_path, args):
                     for i in range(yaw.shape[0]):
                         yaw_preds[test_pair_idxs[current_frame+i, 0], test_pair_idxs[current_frame+i, 1]] = mat2xyzrpy(RT.quat2mat(quat_out[i]))[-1]
                         pred_transl.append(batch_dict['out_translation'][i].detach().cpu())
-                elif exp_cfg['rot_representation'].startswith('6dof') and not args.ransac:
+                elif exp_cfg['rot_representation'].startswith('6dof') and not ransac:
                     transformation = batch_dict['transformation']
                     homogeneous = torch.tensor([0., 0., 0., 1.]).repeat(transformation.shape[0], 1, 1).to(transformation.device)
                     transformation = torch.cat((transformation, homogeneous), dim=1)
@@ -367,7 +369,7 @@ def main_process(gpu, weights_path, args):
                         yaw_preds[test_pair_idxs[current_frame+i, 0], test_pair_idxs[current_frame+i, 1]] = mat2xyzrpy(transformation[i])[-1].item()
                         pred_transf.append(transformation[i].inverse().detach().cpu())
                         pred_transl.append(transformation[i][:3, 3].detach().cpu())
-                elif args.ransac:
+                elif ransac:
                     coords = batch_dict['point_coords'].view(batch_dict['batch_size'], -1, 4)
                     feats = batch_dict['point_features'].squeeze(-1)
                     for i in range(batch_dict['batch_size'] // 2):
@@ -422,7 +424,7 @@ def main_process(gpu, weights_path, args):
                         #     pass
                         # time_ransac.toc()
                         transformation = torch.tensor(result.transformation.copy())
-                        if args.icp:
+                        if icp:
                             p1 = o3d.geometry.PointCloud()
                             p1.points = o3d.utility.Vector3dVector(sample['anchor'][i][:, :3].cpu().numpy())
                             p2 = o3d.geometry.PointCloud()
@@ -525,9 +527,8 @@ def main_process(gpu, weights_path, args):
         "RRE": rre_suc
     }
 
-    if args.save:
+    if save_path:
         # save_path = f'./evaluation_results/lcdnet00+08_{exp_cfg["test_sequence"]}'
-        save_path = args.save
         # if  '360' in weights_path:
         #     save_path = f'./results_for_paper/lcdnet++_{exp_cfg["test_sequence"]}'
         # else:
@@ -551,13 +552,14 @@ if __name__ == '__main__':
     parser.add_argument('--weights_path', default='/home/cattaneo/checkpoints/deep_lcd')
     parser.add_argument('--num_iters', type=int, default=1)
     parser.add_argument('--dataset', type=str, default='kitti')
+    parser.add_argument('--sequence', type=str, default=None)
     parser.add_argument('--ransac', action='store_true', default=False)
     parser.add_argument('--icp', action='store_true', default=False)
-    parser.add_argument('--save', default="")
-    args = parser.parse_args()
+    parser.add_argument('--save_path', default="")
+    args = vars(parser.parse_args())
 
     # if args.device is not None and not args.no_cuda:
     #     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     #     os.environ["CUDA_VISIBLE_DEVICES"] = args.device
 
-    main_process(0, args.weights_path, args)
+    main_process(0, **args)

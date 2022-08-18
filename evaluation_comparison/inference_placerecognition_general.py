@@ -175,7 +175,7 @@ class BatchSamplePairs(BatchSampler):
             yield current_batch
 
 
-def main_process(gpu, weights_path, dataset, data, num_iters=1, save_path=None, sequence=None):
+def main_process(gpu, weights_path, dataset, data, num_iters=1, save_path=None, sequence=None, stats_save_path=None):
     global EPOCH
     rank = gpu
 
@@ -205,10 +205,12 @@ def main_process(gpu, weights_path, dataset, data, num_iters=1, save_path=None, 
             sequences_training = ["2013_05_28_drive_0000_sync", "2013_05_28_drive_0002_sync",
                                   "2013_05_28_drive_0004_sync", "2013_05_28_drive_0005_sync",
                                   "2013_05_28_drive_0006_sync", "2013_05_28_drive_0009_sync"]
-        sequences_validation = [exp_cfg['test_sequence']]
-        sequences_training = set(sequences_training) - set(sequences_validation)
-        sequences_training = list(sequences_training)
-        sequence = sequences_validation[0]
+
+        if dataset != "freiburg":
+            sequences_validation = [exp_cfg['test_sequence']]
+            sequences_training = set(sequences_training) - set(sequences_validation)
+            sequences_training = list(sequences_training)
+            sequence = sequences_validation[0]
 
     if 'loop_file' not in exp_cfg:
         exp_cfg['loop_file'] = 'loop_GT'
@@ -360,6 +362,7 @@ def main_process(gpu, weights_path, dataset, data, num_iters=1, save_path=None, 
     emb_list_map_norm = emb_list_map / np.linalg.norm(emb_list_map, axis=1, keepdims=True)
     pair_dist = faiss.pairwise_distances(emb_list_map_norm, emb_list_map_norm)
     if save_path:
+        print(f"Saving Pairwise Distances to {save_path}")
         np.savez(save_path, pair_dist)
     poses = np.stack(dataset_for_recall.poses)
     precision_ours_fn, recall_ours_fn, precision_ours_fp, recall_ours_fp = compute_PR(pair_dist, poses, map_tree_poses)
@@ -374,6 +377,16 @@ def main_process(gpu, weights_path, dataset, data, num_iters=1, save_path=None, 
     recall_pair_ours = sorted(recall_pair_ours)
     ap_ours_pair = compute_AP(precision_pair_ours, recall_pair_ours)
     print("AP Pairs: ", ap_ours_pair)
+    if stats_save_path:
+        save_dict = {
+            "AP_FP": ap_ours_fp,
+            "AP_FN": ap_ours_fn,
+            "AP_Pairs": ap_ours_pair
+        }
+
+        print(f"Saving Stats file to {stats_save_path}.")
+        with open(stats_save_path, "wb") as f:
+            pickle.dump(save_dict, f)
 
     # # FAISS
     # real_loop = []
@@ -562,7 +575,9 @@ if __name__ == '__main__':
     parser.add_argument('--weights_path', default='/home/cattaneo/checkpoints/deep_lcd')
     parser.add_argument('--num_iters', type=int, default=1)
     parser.add_argument('--dataset', type=str, default='kitti')
+    parser.add_argument('--sequence', type=str, default=None)
     parser.add_argument('--save_path', type=str, default=None)
+    parser.add_argument('--stats_save_path', type=str, default=None)
     args = parser.parse_args()
 
     main_process(0, **vars(args))

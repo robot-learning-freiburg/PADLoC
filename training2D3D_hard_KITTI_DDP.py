@@ -535,7 +535,8 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         wandb_id = dt_string_folder
 
         wandb.init(project=project_name, name=dt_string, config=exp_cfg, id=wandb_id,
-                   tags=exp_cfg.get("tags", None), notes=exp_cfg.get("notes", None), resume=resume_wandb)
+                   tags=exp_cfg.get("tags", None), notes=exp_cfg.get("notes", None), resume=resume_wandb,
+                   settings=wandb.Settings(start_method="fork"))
 
     if args.dataset == 'kitti':
         sequences_training = ["00", "03", "04", "05", "06", "07", "08", "09"]  # compulsory data in sequence 10 missing
@@ -543,7 +544,10 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         sequences_training = ["2013_05_28_drive_0000_sync", "2013_05_28_drive_0002_sync",
                               "2013_05_28_drive_0004_sync", "2013_05_28_drive_0005_sync",
                               "2013_05_28_drive_0006_sync", "2013_05_28_drive_0009_sync"]
-    sequences_validation = [exp_cfg['test_sequence']]
+
+    sequences_validation = exp_cfg['test_sequence']
+    if not isinstance(sequences_validation, list):
+        sequences_validation = [sequences_validation]
     sequences_training = set(sequences_training) - set(sequences_validation)
     sequences_training = list(sequences_training)
 
@@ -1345,6 +1349,7 @@ if __name__ == '__main__':
         except Exception as e:
             print("Invalid configuration override:")
             print(e)
+            print(override_cfg)
 
     if args.gpu_count == -1:
         args.gpu_count = torch.cuda.device_count()
