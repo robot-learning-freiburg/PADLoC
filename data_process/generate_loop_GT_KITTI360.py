@@ -99,11 +99,12 @@ class KITTI360(Dataset):
 
 
 if __name__ == '__main__':
-    base_dir = "/media/RAIDONE/DATASETS/KITTI-360"
+    base_dir = "/home/arceyd/MT/dat/kitti360"
     sequence = "00"
     for sequence in ["2013_05_28_drive_0000_sync", "2013_05_28_drive_0002_sync", "2013_05_28_drive_0003_sync",
                      "2013_05_28_drive_0004_sync", "2013_05_28_drive_0005_sync", "2013_05_28_drive_0006_sync",
                      "2013_05_28_drive_0007_sync", "2013_05_28_drive_0009_sync", "2013_05_28_drive_0010_sync"]:
+        print(sequence)
         # poses_file = base_dir + "/sequences/" + sequence + "/poses.csv"
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         # dataset = KITTILoader3DPoses(dir, sequence, poses_file, 4096, device)
