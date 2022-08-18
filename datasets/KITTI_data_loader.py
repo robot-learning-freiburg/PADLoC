@@ -22,16 +22,33 @@ import utils.rotation_conversion as RT
 from utils.semantic_superclass_mapper import SemanticSuperclassMapper
 
 
-def get_velo(idx, dir, sequence, without_ground, jitter=False):
-    if without_ground:
-        velo_path = os.path.join(dir, 'sequences', f'{int(sequence):02d}',
-                                 'velodyne_no_ground', f'{idx:06d}.h5')
-        with h5py.File(velo_path, 'r') as hf:
-            scan = hf['PC'][:]
-    else:
-        velo_path = os.path.join(dir, 'sequences', f'{int(sequence):02d}', 'velodyne', f'{idx:06d}.bin')
-        scan = np.fromfile(velo_path, dtype=np.float32)
+def get_velo(idx, kitti_dir, sequence, without_ground, jitter=False):
+    # Original Without_ground implementation, where the scans were already filtered in a different file
+    # if without_ground:
+    #     velo_path = os.path.join(dir, 'sequences', f'{int(sequence):02d}',
+    #                              'velodyne_no_ground', f'{idx:06d}.h5')
+    #     with h5py.File(velo_path, 'r') as hf:
+    #         scan = hf['PC'][:]
+    # else:
+    #     velo_path = os.path.join(dir, 'sequences', f'{int(sequence):02d}', 'velodyne', f'{idx:06d}.bin')
+    #     scan = np.fromfile(velo_path, dtype=np.float32)
+
+    velo_path = os.path.join(kitti_dir, "sequences", f"{int(sequence):02d}", "velodyne", f"{idx:06d}.bin")
+    scan = np.fromfile(velo_path, dtype=np.float32)
     scan = scan.reshape((-1, 4))
+
+    # New without-ground implementation,
+    # where the indices of the ground points are stored in a file, instead of the filtered scan.
+    if without_ground:
+        no_ground_idx_path = os.path.join(kitti_dir, "sequences", f"{int(sequence):02d}", "velodyne_no_ground_idxs",
+                                       f"{idx:06d}.npy")
+        with h5py.File(no_ground_idx_path, "r") as hf:
+            no_ground_idx = hf["PC"][:]
+
+        ground_mask = np.zeros(scan.shape[0], bool)
+        ground_mask[no_ground_idx] = True
+
+        scan = scan[ground_mask]
 
     if jitter:
         noise = 0.01 * np.random.randn(scan.shape[0], scan.shape[1]).astype(np.float32)
@@ -41,17 +58,29 @@ def get_velo(idx, dir, sequence, without_ground, jitter=False):
     return scan
 
 
-def get_velo_with_panoptic(idx, kitti_dir, sequence, **kwargs):
-
-    use_semantic = kwargs.get("use_semantic", True)
-    use_panoptic = kwargs.get("use_panotpic", False)
-    jitter = kwargs.get("jitter", False)
-    use_logits = kwargs.get("use_logits", True)
-    filter_dynamic_classes = kwargs.get("filter_dynamic", False)
+def get_velo_with_panoptic(idx, kitti_dir, sequence,
+                           use_semantic=True, use_panoptic=False,
+                           use_logits=True,
+                           filter_dynamic_classes=False, dynamic_classes=None,
+                           without_ground=False,
+                           jitter=False,
+                           **_):
 
     velo_path = os.path.join(kitti_dir, 'sequences', f'{int(sequence):02d}', 'velodyne', f'{idx:06d}.bin')
     scan = np.fromfile(velo_path, dtype=np.float32)
     scan = scan.reshape((-1, 4))
+    n_points = scan.shape[0]
+
+    if without_ground:
+        no_ground_idx_path = os.path.join(kitti_dir, "sequences", f"{int(sequence):02d}", "velodyne_no_ground_idxs",
+                                       f"{idx:06d}.npy")
+        with h5py.File(no_ground_idx_path, "r") as hf:
+            no_ground_idx = hf["PC"][:]
+
+        ground_mask = np.zeros(scan.shape[0], bool)
+        ground_mask[no_ground_idx] = True
+
+        scan = scan[ground_mask]
 
     if jitter:
         noise = 0.01 * np.random.randn(scan.shape[0], scan.shape[1]).astype(np.float32)
@@ -63,7 +92,7 @@ def get_velo_with_panoptic(idx, kitti_dir, sequence, **kwargs):
         panoptic_path = os.path.join(kitti_dir, 'sequences', f'{int(sequence):02d}',
                                      'labels', f'{idx:06d}.label')
         panoptic = np.fromfile(panoptic_path, dtype=np.float32)
-        panoptic = panoptic.reshape(scan.shape[0], -1)
+        panoptic = panoptic.reshape(n_points, -1)
 
         if use_semantic and use_panoptic:
             logits = panoptic
@@ -81,42 +110,45 @@ def get_velo_with_panoptic(idx, kitti_dir, sequence, **kwargs):
         panoptic_path = os.path.join(kitti_dir, 'sequences', f'{int(sequence):02d}',
                                       'labels', f'{idx:06d}.label')
         panoptic = np.fromfile(panoptic_path, dtype=np.int32)
-        panoptic = panoptic.reshape(scan.shape[0], -1)
+        panoptic = panoptic.reshape(n_points, -1)
+
+        if without_ground:
+            panoptic = panoptic[ground_mask]
 
         semantic = np.bitwise_and(panoptic, 0xFFFF).astype(np.float32)
         instance = np.right_shift(panoptic, 16).astype(np.float32)
         panoptic = panoptic.astype(np.float32)
 
         if filter_dynamic_classes:
+            if dynamic_classes is None:
+                dynamic_classes = [
+                    1,  # Outlier
+                    # Vehicles
+                    10,  # Car
+                    11,  # Bicycle
+                    13,  # Bus
+                    15,  # Motorcycle
+                    16,  # On-Rails
+                    18,  # Truck
+                    20,  # Other-Vehicle
 
-            dynamic_classes = kwargs.get("dynamic_classes") or [
-                1,  # Outlier
-                # Vehicles
-                10,  # Car
-                11,  # Bicycle
-                13,  # Bus
-                15,  # Motorcycle
-                16,  # On-Rails
-                18,  # Truck
-                20,  # Other-Vehicle
+                    # Moving Vehicles
+                    252,  # Moving-Car
+                    257,  # Moving-Bus
+                    256,  # Moving-On-Rails
+                    258,  # Moving-Truck
+                    259,  # Moving-Other-Vehicle
 
-                # Moving Vehicles
-                252,  # Moving-Car
-                257,  # Moving-Bus
-                256,  # Moving-On-Rails
-                258,  # Moving-Truck
-                259,  # Moving-Other-Vehicle
+                    # People
+                    30,  # Person
+                    31,  # Bicyclist
+                    32,  # Motorcyclist
 
-                # People
-                30,  # Person
-                31,  # Bicyclist
-                32,  # Motorcyclist
-
-                # Moving People
-                254,  # Moving-Person
-                253,  # Moving-Bicyclist
-                255,  # Moving-Motorcyclist
-            ]
+                    # Moving People
+                    254,  # Moving-Person
+                    253,  # Moving-Bicyclist
+                    255,  # Moving-Motorcyclist
+                ]
 
             mask = np.ones_like(semantic)
 
@@ -271,6 +303,7 @@ class KITTILoader3DPoses(Dataset):
                                                                jitter=self.jitter,
                                                                use_logits=self.use_logits,
                                                                filter_dynamic=self.filter_dynamic,
+                                                               without_ground=self.without_ground,
                                                                dynamic_classes=self.dynamic_classes)
             anchor_pcd = torch.from_numpy(anchor_pcd)
         else:
@@ -472,6 +505,7 @@ class KITTILoader3DDictSingle(Dataset):
                                                                jitter=self.jitter,
                                                                use_logits=self.use_logits,
                                                                filter_dynamic=self.filter_dynamic,
+                                                               without_ground=self.without_ground,
                                                                dynamic_classes=self.dynamic_classes)
             anchor_pcd = torch.from_numpy(anchor_pcd)
 
@@ -618,6 +652,7 @@ class KITTILoader3DDictPairs(Dataset):
                                                                jitter=self.jitter,
                                                                use_logits=self.use_logits,
                                                                filter_dynamic=self.filter_dynamic,
+                                                               without_ground=self.without_ground,
                                                                dynamic_classes=self.dynamic_classes)
             anchor_pcd = torch.from_numpy(anchor_pcd)
 
@@ -647,6 +682,7 @@ class KITTILoader3DDictPairs(Dataset):
                                                                    jitter=self.jitter,
                                                                    use_logits=self.use_logits,
                                                                    filter_dynamic=self.filter_dynamic,
+                                                                   without_ground=self.without_ground,
                                                                    dynamic_classes=self.dynamic_classes)
             positive_pcd = torch.from_numpy(positive_pcd)
 
@@ -748,7 +784,7 @@ class KITTILoader3DDictTriplets(Dataset):
         for i in range(len(self.loop_gt)):
             self.have_matches.append(self.loop_gt[i]['idx'])
 
-        self.use_logits = kwargs.get("use_logits", True)
+        self.use_logits = kwargs.get("use_logits", False)
         self.superclass_mapper = SemanticSuperclassMapper(cfg_file=kwargs.get("superclass_cfg_file"))
 
     def __len__(self):
@@ -766,6 +802,7 @@ class KITTILoader3DDictTriplets(Dataset):
                                                                jitter=self.jitter,
                                                                use_logits=self.use_logits,
                                                                filter_dynamic=self.filter_dynamic,
+                                                               without_ground=self.without_ground,
                                                                dynamic_classes=self.dynamic_classes)
             anchor_pcd = torch.from_numpy(anchor_pcd)
 
@@ -792,6 +829,7 @@ class KITTILoader3DDictTriplets(Dataset):
                                                                    jitter=self.jitter,
                                                                    use_logits=self.use_logits,
                                                                    filter_dynamic=self.filter_dynamic,
+                                                                   without_ground=self.without_ground,
                                                                    dynamic_classes=self.dynamic_classes)
             positive_pcd = torch.from_numpy(positive_pcd)
 
@@ -824,6 +862,7 @@ class KITTILoader3DDictTriplets(Dataset):
                                                                    jitter=self.jitter,
                                                                    use_logits=self.use_logits,
                                                                    filter_dynamic=self.filter_dynamic,
+                                                                   without_ground=self.without_ground,
                                                                    dynamic_classes=self.dynamic_classes)
             negative_pcd = torch.from_numpy(negative_pcd)
 
