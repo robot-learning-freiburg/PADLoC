@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from .heads import compute_rigid_transform
 from torch.nn.modules.transformer import Transformer
 from .xatransformer import XATransformerEncoderLayer, XATransformerEncoder
-from .pytransformer_head_v2 import norm_hill_number, berger_parker_index, weight_sum
+from .match_weighter import norm_hill_number, berger_parker_index, weight_sum
 from utils.tools import SVDNonConvergenceError
 
 
