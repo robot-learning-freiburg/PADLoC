@@ -35,12 +35,13 @@ class FordCampusDataset(Dataset):
         seq_cfg = self.SEQUENCES[seq]
         start_frame = seq_cfg.start_frame
         end_frame = seq_cfg.end_frame
-        self.frames = list(range(start_frame, end_frame + 1))
+        self.frames = np.arange(start_frame, end_frame + 1)
 
         # Takes too long to load the poses, since the entire scan has to be read.
-        # Better to save them to a different file
+        # Better to save them to a different file for future reusability
         if os.path.exists(self.poses_path):
             self.poses = np.loadtxt(self.poses_path).reshape((-1, 4, 4))
+            assert self.poses.shape[0] == self.frames.shape[0]
         else:
             print(f"Extracting poses into {self.poses_path}")
             poses = [self.extract_pose(i) for i in tqdm(self.frames)]
