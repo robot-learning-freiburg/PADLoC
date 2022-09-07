@@ -60,12 +60,13 @@ class FreiburgDataset(Dataset):
 
 
 class FreiburgRegistrationDataset(Dataset):
-    def __init__(self, base_folder, without_ground=False, get_pc=True):
+    def __init__(self, base_folder, without_ground=False, get_pc=True, z_offset=0.283):
         super(FreiburgRegistrationDataset, self).__init__()
         self.base_folder = base_folder
         self.without_ground = without_ground
         self.get_pc = get_pc
         self.pairs = []
+        self.z_offset = z_offset
         # root_path = '/home/cattaneo/Datasets/iter200'
         # root_path = '/media/RAIDONE/vaghi/Freiburg/gt_icp/iter200'
         root_path = os.path.join(base_folder, 'iter1000')
@@ -129,6 +130,10 @@ class FreiburgRegistrationDataset(Dataset):
         if self.get_pc:
             pc_anchor = torch.from_numpy(self.get_velo(id_source)).float()
             pc_positive = torch.from_numpy(self.get_velo(id_target)).float()
+
+            if self.z_offset:
+                pc_anchor += self.z_offset
+                pc_positive += self.z_offset
 
         transformation = self.lidar2gps @ np.linalg.inv(self.RT_source[idx])
         transformation = transformation @ np.linalg.inv(self.RT_icp[idx])
