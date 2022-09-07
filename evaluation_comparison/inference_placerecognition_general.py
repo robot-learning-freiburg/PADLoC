@@ -3,18 +3,14 @@ from datasets.NCLTDataset import NCLTDataset
 import os
 import pickle
 import time
-from collections import OrderedDict
 
 import faiss
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.parallel
 import torch.utils.data
 from pcdet.datasets.kitti.kitti_dataset import KittiDataset
-import random
 
-from sklearn.metrics import precision_recall_curve, average_precision_score
 from sklearn.neighbors import KDTree
 from torch.utils.data.sampler import Sampler, BatchSampler
 from tqdm import tqdm
@@ -23,25 +19,16 @@ from datasets.Freiburg import FreiburgDataset
 from datasets.KITTI360Dataset import KITTI3603DPoses
 from datasets.KITTI_data_loader import KITTILoader3DPoses
 from evaluation_comparison.plot_PR_curve import compute_PR, compute_AP, compute_PR_pairs
-from models.get_models import get_model
+from models.get_models import load_model
 from models.backbone3D.RandLANet.RandLANet import prepare_randlanet_input
 from models.backbone3D.RandLANet.helper_tool import ConfigSemanticKITTI2
 from utils.data import merge_inputs
-from datetime import datetime
+from utils.tools import set_seed
 from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointnet2_utils import furthest_point_sample
 
 torch.backends.cudnn.benchmark = True
 
 EPOCH = 1
-
-
-def _init_fn(worker_id, epoch=0, seed=0):
-    seed = seed + worker_id + epoch * 100
-    seed = seed % (2**32 - 1)
-    print(f"Init worker {worker_id} with seed {seed}")
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
 
 
 def prepare_input(model, samples, exp_cfg, device):
@@ -175,57 +162,68 @@ class BatchSamplePairs(BatchSampler):
             yield current_batch
 
 
-def main_process(gpu, weights_path, dataset, data, num_iters=1, save_path=None, sequence=None, stats_save_path=None):
+def main_process(gpu, weights_path, dataset, data, seed=0, batch_size=6, num_iters=1, sequence=None,
+                 save_path=None, stats_save_path=None, loop_file=None, z_offset=0.283):
     global EPOCH
     rank = gpu
+
+    set_seed(seed)
 
     torch.cuda.set_device(gpu)
     device = torch.device(gpu)
 
-    saved_params = torch.load(weights_path, map_location='cpu')
+    # saved_params = torch.load(weights_path, map_location='cpu')
 
     # asd = torch.load('/home/cattaneod/rpmnet_08_4m_shared.tar', map_location='cpu')
 
     # exp_cfg = saved_params['config']
-    exp_cfg = saved_params['config']
-    exp_cfg['batch_size'] = 6
+    # exp_cfg = saved_params['config']
+    override_cfg = dict(
+        batch_size=batch_size,
+    )
 
-    current_date = datetime.now()
+    if loop_file is not None:
+        override_cfg["loop_file"] = loop_file
+
+    # current_date = datetime.now()
 
     if sequence is None:
         if dataset == 'kitti':
-            exp_cfg['test_sequence'] = "08"
-            sequences_training = ["00", "03", "04", "05", "06", "07", "08", "09"]  # compulsory data in sequence 10 missing
+            override_cfg['test_sequence'] = "08"
+            # compulsory data in sequence 10 missing
+            sequences_training = ["00", "03", "04", "05", "06", "07", "08", "09"]
         elif dataset == 'nclt':
-            exp_cfg['test_sequence'] = "2013-04-05"
+            override_cfg['test_sequence'] = "2013-04-05"
             sequences_training = ["2012-01-08", "2012-01-15", "2012-01-22", "2012-02-04", "2012-03-25",
                                   "2012-03-31", "2012-05-26", "2012-10-28", "2012-11-17", "2012-12-01"]
         elif dataset == 'kitti360':
-            exp_cfg['test_sequence'] = "2013_05_28_drive_0002_sync"
+            override_cfg['test_sequence'] = "2013_05_28_drive_0002_sync"
             sequences_training = ["2013_05_28_drive_0000_sync", "2013_05_28_drive_0002_sync",
                                   "2013_05_28_drive_0004_sync", "2013_05_28_drive_0005_sync",
                                   "2013_05_28_drive_0006_sync", "2013_05_28_drive_0009_sync"]
 
         if dataset != "freiburg":
-            sequences_validation = [exp_cfg['test_sequence']]
-            sequences_training = set(sequences_training) - set(sequences_validation)
-            sequences_training = list(sequences_training)
+            sequences_validation = [override_cfg['test_sequence']]
+            # sequences_training = set(sequences_training) - set(sequences_validation)
+            # sequences_training = list(sequences_training)
             sequence = sequences_validation[0]
 
-    if 'loop_file' not in exp_cfg:
-        exp_cfg['loop_file'] = 'loop_GT'
-    if 'sinkhorn_type' not in exp_cfg:
-        exp_cfg['sinkhorn_type'] = 'unbalanced'
-    if 'shared_embeddings' not in exp_cfg:
-        exp_cfg['shared_embeddings'] = False
-    if 'use_semantic' not in exp_cfg:
-        exp_cfg['use_semantic'] = False
-    if 'use_panoptic' not in exp_cfg:
-        exp_cfg['use_panoptic'] = False
-    if 'noneg' in exp_cfg['loop_file']:
-        exp_cfg['loop_file'] = 'loop_GT_4m'
-    if 'head' not in exp_cfg:
-        exp_cfg['head'] = 'SuperGlue'
+    # if 'loop_file' not in exp_cfg:
+    #     exp_cfg['loop_file'] = 'loop_GT'
+    # if 'sinkhorn_type' not in exp_cfg:
+    #     exp_cfg['sinkhorn_type'] = 'unbalanced'
+    # if 'shared_embeddings' not in exp_cfg:
+    #     exp_cfg['shared_embeddings'] = False
+    # if 'use_semantic' not in exp_cfg:
+    #     exp_cfg['use_semantic'] = False
+    # if 'use_panoptic' not in exp_cfg:
+    #     exp_cfg['use_panoptic'] = False
+    # if 'noneg' in exp_cfg['loop_file']:
+    #     exp_cfg['loop_file'] = 'loop_GT_4m'
+    # if 'head' not in exp_cfg:
+    #     exp_cfg['head'] = 'SuperGlue'
+
+    model, exp_cfg = load_model(weights_path, override_cfg_dict=override_cfg)
 
     if dataset == 'kitti':
         dataset_for_recall = KITTILoader3DPoses(data, sequence,
@@ -238,15 +236,15 @@ def main_process(gpu, weights_path, dataset, data, num_iters=1, save_path=None, 
                                              train=False,
                                              without_ground=exp_cfg['without_ground'], loop_file='loop_GT_4m_noneg')
     elif dataset == 'freiburg':
-        dataset_for_recall = FreiburgDataset(data, without_ground=exp_cfg['without_ground'])
+        dataset_for_recall = FreiburgDataset(data, without_ground=exp_cfg['without_ground'], z_offset=z_offset)
     elif dataset == 'nclt':
         dataset_for_recall = NCLTDataset(data, sequence)
 
-    dataset_list_valid = [dataset_for_recall]
+    # dataset_list_valid = [dataset_for_recall]
 
     # get_dataset3d_mean_std(training_dataset)
 
-    final_dest = ''
+    # final_dest = ''
 
     # with open(f'/home/cattaneod/CODES/overlapnet_custom/GT/{exp_cfg["test_sequence"]}/GT2.pickle', 'rb') as f:
     #     gts = pickle.load(f)
@@ -274,18 +272,18 @@ def main_process(gpu, weights_path, dataset, data, num_iters=1, save_path=None, 
                                             collate_fn=merge_inputs,
                                             pin_memory=True)
 
-    model = get_model(exp_cfg, is_training=False)
-    renamed_dict = OrderedDict()
-    for key in saved_params['state_dict']:
-        if not key.startswith('module'):
-            renamed_dict = saved_params['state_dict']
-            break
-        else:
-            renamed_dict[key[7:]] = saved_params['state_dict'][key]
-
-    res = model.load_state_dict(renamed_dict, strict=False)
-    if len(res[0]) > 0:
-        print(f"WARNING: MISSING {len(res[0])} KEYS, MAYBE WEIGHTS LOADING FAILED")
+    # model = get_model(exp_cfg, is_training=False)
+    # renamed_dict = OrderedDict()
+    # for key in saved_params['state_dict']:
+    #     if not key.startswith('module'):
+    #         renamed_dict = saved_params['state_dict']
+    #         break
+    #     else:
+    #         renamed_dict[key[7:]] = saved_params['state_dict'][key]
+    #
+    # res = model.load_state_dict(renamed_dict, strict=False)
+    # if len(res[0]) > 0:
+    #     print(f"WARNING: MISSING {len(res[0])} KEYS, MAYBE WEIGHTS LOADING FAILED")
 
     model.train()
     model = model.to(device)
@@ -575,9 +573,14 @@ if __name__ == '__main__':
     parser.add_argument('--weights_path', default='/home/cattaneo/checkpoints/deep_lcd')
     parser.add_argument('--num_iters', type=int, default=1)
     parser.add_argument('--dataset', type=str, default='kitti')
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument('--sequence', type=str, default=None)
+    parser.add_argument('--loop_file', type=str, default=None)
+    parser.add_argument("--batch_size", type=int, default=6)
     parser.add_argument('--save_path', type=str, default=None)
     parser.add_argument('--stats_save_path', type=str, default=None)
+    parser.add_argument("--z_offset", type=float, default=0.283)
+
     args = parser.parse_args()
 
     main_process(0, **vars(args))

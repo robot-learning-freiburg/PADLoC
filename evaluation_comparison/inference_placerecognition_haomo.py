@@ -1,5 +1,4 @@
 from argparse import ArgumentParser
-from collections import OrderedDict
 import os
 from pathlib import Path
 from time import time
@@ -17,9 +16,10 @@ from tqdm import tqdm
 from datasets.haomo import HaomoLoader
 from evaluation_comparison.inference_placerecognition_mulran import compute_PR_mulran
 from evaluation_comparison.plot_PR_curve import compute_AP
-from models.get_models import get_model
+from models.get_models import load_model
 from pcdet.datasets.kitti.kitti_dataset import KittiDataset
 from utils.data import merge_inputs
+from utils.tools import set_seed
 
 
 def compute_emb_map(dataloader, model, device, world_size, rank, n_samples, seq):
@@ -78,11 +78,13 @@ def compute_emb_map(dataloader, model, device, world_size, rank, n_samples, seq)
     return emb_list_map, time_descriptors
 
 
-def main(gpu, weights_path, common_seed, world_size, dataset_path,
+def main(gpu, weights_path, seed, world_size, dataset_path,
          seq1=None, seq2=None, stride=10,
          batch_size=15,
          pr_filename=None,
          stats_filename=None):
+
+    set_seed(seed)
 
     rank = gpu
     dist.init_process_group(
@@ -96,22 +98,26 @@ def main(gpu, weights_path, common_seed, world_size, dataset_path,
     device = torch.device(gpu)
 
     # Load model
-    saved_params = torch.load(weights_path, map_location='cpu')
-    exp_cfg = saved_params['config']
-    exp_cfg['batch_size'] = batch_size
+    # saved_params = torch.load(weights_path, map_location='cpu')
+    # exp_cfg = saved_params['config']
+    override_cfg = dict(
+        batch_size=batch_size,
+    )
 
-    model = get_model(exp_cfg, is_training=False)
-    renamed_dict = OrderedDict()
-    for key in saved_params['state_dict']:
-        if not key.startswith('module'):
-            renamed_dict = saved_params['state_dict']
-            break
-        else:
-            renamed_dict[key[7:]] = saved_params['state_dict'][key]
+    model, exp_cfg = load_model(weights_path, override_cfg_dict=override_cfg)
 
-    res = model.load_state_dict(renamed_dict, strict=False)
-    if len(res[0]) > 0:
-        print(f"WARNING: MISSING {len(res[0])} KEYS, MAYBE WEIGHTS LOADING FAILED")
+    # model = get_model(exp_cfg, is_training=False)
+    # renamed_dict = OrderedDict()
+    # for key in saved_params['state_dict']:
+    #     if not key.startswith('module'):
+    #         renamed_dict = saved_params['state_dict']
+    #         break
+    #     else:
+    #         renamed_dict[key[7:]] = saved_params['state_dict'][key]
+    #
+    # res = model.load_state_dict(renamed_dict, strict=False)
+    # if len(res[0]) > 0:
+    #     print(f"WARNING: MISSING {len(res[0])} KEYS, MAYBE WEIGHTS LOADING FAILED")
 
     model.train()
     model = DistributedDataParallel(model.to(device), device_ids=[rank], output_device=rank,
@@ -127,14 +133,14 @@ def main(gpu, weights_path, common_seed, world_size, dataset_path,
         dataset_for_recall1,
         num_replicas=world_size,
         rank=rank,
-        seed=common_seed,
+        seed=seed,
         shuffle=False
     )
     dataset3_sampler = DistributedSampler(
         dataset_for_recall3,
         num_replicas=world_size,
         rank=rank,
-        seed=common_seed,
+        seed=seed,
         shuffle=False
     )
 
@@ -170,11 +176,11 @@ def main(gpu, weights_path, common_seed, world_size, dataset_path,
             print(f"Saving pairwise distances to {pr_filename}.")
             np.savez(pr_filename, pair_dist)
 
-        precision_ours_fn, recall_ours_fn, precision_ours_fp, recall_ours_fp = compute_PR_mulran(pair_dist,
-                                                                                             dataset_for_recall1.poses,
-                                                                                             dataset_for_recall3.poses)
-        ap_ours_fp = compute_AP(precision_ours_fp, recall_ours_fp)
-        ap_ours_fn = compute_AP(precision_ours_fn, recall_ours_fn)
+        precision_fn, recall_fn, precision_fp, recall_fp = compute_PR_mulran(pair_dist,
+                                                                             dataset_for_recall1.poses,
+                                                                             dataset_for_recall3.poses)
+        ap_ours_fp = compute_AP(precision_fp, recall_fp)
+        ap_ours_fn = compute_AP(precision_fn, recall_fn)
 
         print(weights_path)
         print(exp_cfg['test_sequence'])
@@ -208,7 +214,7 @@ if __name__ == "__main__":
     parser.add_argument('--seq1', type=str, default=None)
     parser.add_argument('--seq2', type=str, default=None)
     parser.add_argument("--stride", type=int, default=1)
-    parser.add_argument("--common_seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--gpu_count", type=int, default=def_gpu_count)
     parser.add_argument("--pr_filename", type=str, default=None)
     parser.add_argument("--stats_filename", type=str, default=None)
@@ -220,6 +226,6 @@ if __name__ == "__main__":
     args.gpu_count = torch.cuda.device_count()
 
     mp.spawn(main, nprocs=args.gpu_count, args=(
-        args.weights_path, args.common_seed, args.gpu_count, args.data, args.seq1, args.seq2, args.stride,
+        args.weights_path, args.seed, args.gpu_count, args.data, args.seq1, args.seq2, args.stride,
         args.batch_size, args.pr_filename, args.stats_filename
     ))

@@ -1,3 +1,4 @@
+import random
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -222,3 +223,12 @@ def run_panoptic(panoptic_model, sample, device, make_panoptic, post, exp_cfg):
         for sample_id in range(len(sample['positive'])):
             sample['positive_logits'].append(logits_list[len(sample['anchor'])+sample_id])
     return sample
+
+
+def set_seed(worker_id, epoch=0, seed=0):
+    seed = seed + worker_id + epoch * 100
+    seed = seed % (2**32 - 1)
+    print(f"Init worker {worker_id} with seed {seed}")
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)

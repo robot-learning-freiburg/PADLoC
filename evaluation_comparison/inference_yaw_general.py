@@ -10,9 +10,7 @@ import torch.nn.parallel
 import torch.utils.data
 import torch.nn.functional as F
 from pcdet.datasets.kitti.kitti_dataset import KittiDataset
-import random
 
-from scipy.spatial import KDTree
 from scipy.spatial.transform import Rotation
 from scipy.stats import circmean, circstd
 from torch.utils.data.sampler import Sampler, BatchSampler
@@ -20,15 +18,15 @@ from tqdm import tqdm
 
 from datasets.KITTI360Dataset import KITTI3603DPoses
 from datasets.KITTI_data_loader import KITTILoader3DPoses
-from models.get_models import get_model
+from models.get_models import load_model
 from models.backbone3D.RandLANet.RandLANet import prepare_randlanet_input
 from models.backbone3D.RandLANet.helper_tool import ConfigSemanticKITTI2
 from utils.data import merge_inputs, Timer
-from datetime import datetime
 from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointnet2_utils import furthest_point_sample
 from utils.geometry import mat2xyzrpy
 import utils.rotation_conversion as RT
 from utils.qcqp_layer import QuadQuatFastSolver
+from utils.tools import set_seed
 
 import open3d as o3d
 if hasattr(o3d, 'pipelines'):
@@ -39,15 +37,6 @@ else:
 torch.backends.cudnn.benchmark = True
 
 EPOCH = 1
-
-
-def _init_fn(worker_id, epoch=0, seed=0):
-    seed = seed + worker_id + epoch * 100
-    seed = seed % (2**32 - 1)
-    print(f"Init worker {worker_id} with seed {seed}")
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
 
 
 def get_database_embs(model, sample, exp_cfg, device):
@@ -158,48 +147,62 @@ def rot2aa(rotation):
     return axis, angle
 
 
-def main_process(gpu, weights_path, dataset, data, sequence=None, num_iters=1, ransac=False, icp=False, save_path=None):
+def main_process(gpu, weights_path, dataset, data, batch_size=8, sequence=None, loop_file=None,
+                 num_iters=1, seed=0, ransac=False, icp=False,
+                 save_path=None):
     global EPOCH
     rank = gpu
+
+    set_seed(seed)
 
     torch.cuda.set_device(gpu)
     device = torch.device(gpu)
 
-    saved_params = torch.load(weights_path, map_location='cpu')
-    exp_cfg = saved_params['config']
-    exp_cfg['batch_size'] = 2
+    # saved_params = torch.load(weights_path, map_location='cpu')
+    # exp_cfg = saved_params['config']
+    # exp_cfg['batch_size'] = 2
 
-    if 'loop_file' not in exp_cfg:
-        exp_cfg['loop_file'] = 'loop_GT'
-    if 'sinkhorn_type' not in exp_cfg:
-        exp_cfg['sinkhorn_type'] = 'unbalanced'
-    if 'shared_embeddings' not in exp_cfg:
-        exp_cfg['shared_embeddings'] = False
-    if 'use_semantic' not in exp_cfg:
-        exp_cfg['use_semantic'] = False
-    if 'use_panoptic' not in exp_cfg:
-        exp_cfg['use_panoptic'] = False
-    if 'noneg' in exp_cfg['loop_file']:
-        exp_cfg['loop_file'] = 'loop_GT_4m'
-    if 'head' not in exp_cfg:
-        exp_cfg['head'] = 'SuperGlue'
+    override_cfg = dict(
+        batch_size=batch_size,
+    )
+    if loop_file is not None:
+        override_cfg["loop_file"] = loop_file
 
-    current_date = datetime.now()
+    # if 'loop_file' not in exp_cfg:
+    #     exp_cfg['loop_file'] = 'loop_GT'
+    # if 'sinkhorn_type' not in exp_cfg:
+    #     exp_cfg['sinkhorn_type'] = 'unbalanced'
+    # if 'shared_embeddings' not in exp_cfg:
+    #     exp_cfg['shared_embeddings'] = False
+    # if 'use_semantic' not in exp_cfg:
+    #     exp_cfg['use_semantic'] = False
+    # if 'use_panoptic' not in exp_cfg:
+    #     exp_cfg['use_panoptic'] = False
+    # if 'noneg' in exp_cfg['loop_file']:
+    #     exp_cfg['loop_file'] = 'loop_GT_4m'
+    # if 'head' not in exp_cfg:
+    #     exp_cfg['head'] = 'SuperGlue'
+
+    # current_date = datetime.now()
+
 
     if sequence is None:
         if dataset == 'kitti':
-            exp_cfg['test_sequence'] = "08"
-            sequences_training = ["00", "03", "04", "05", "06", "07", "08", "09"]  # compulsory data in sequence 10 missing
+            override_cfg['test_sequence'] = "08"
+            # compulsory data in sequence 10 missing
+            sequences_training = ["00", "03", "04", "05", "06", "07", "08", "09"]
         else:
-            exp_cfg['test_sequence'] = "2013_05_28_drive_0009_sync"
+            override_cfg['test_sequence'] = "2013_05_28_drive_0009_sync"
             sequences_training = ["2013_05_28_drive_0000_sync", "2013_05_28_drive_0002_sync",
                                   "2013_05_28_drive_0004_sync", "2013_05_28_drive_0005_sync",
                                   "2013_05_28_drive_0006_sync", "2013_05_28_drive_0009_sync"]
-        sequences_validation = [exp_cfg['test_sequence']]
+        sequences_validation = [override_cfg['test_sequence']]
         sequences_training = set(sequences_training) - set(sequences_validation)
         sequences_training = list(sequences_training)
-        exp_cfg['sinkhorn_iter'] = 5
+        override_cfg['sinkhorn_iter'] = 5
         sequence = sequences_validation[0]
+
+    model, exp_cfg = load_model(weights_path, override_cfg_dict=override_cfg)
 
     if dataset == 'kitti':
         dataset_for_recall = KITTILoader3DPoses(data, sequence,
@@ -213,22 +216,28 @@ def main_process(gpu, weights_path, dataset, data, sequence=None, num_iters=1, r
                                              without_ground=exp_cfg['without_ground'], loop_file='loop_GT_4m_noneg')
 
 
-    dataset_list_valid = [dataset_for_recall]
+    # dataset_list_valid = [dataset_for_recall]
 
     # get_dataset3d_mean_std(training_dataset)
 
-    final_dest = ''
+    # final_dest = ''
 
-    MapLoader = torch.utils.data.DataLoader(dataset=dataset_for_recall,
-                                            batch_size=exp_cfg['batch_size'],
-                                            num_workers=2,
-                                            shuffle=False,
-                                            collate_fn=merge_inputs,
-                                            pin_memory=True)
-    map_tree_poses = KDTree(np.stack(dataset_for_recall.poses)[:, :3, 3])
+    # MapLoader = torch.utils.data.DataLoader(dataset=dataset_for_recall,
+    #                                         batch_size=exp_cfg['batch_size'],
+    #                                         num_workers=2,
+    #                                         shuffle=False,
+    #                                         collate_fn=merge_inputs,
+    #                                         pin_memory=True)
+    # map_tree_poses = KDTree(np.stack(dataset_for_recall.poses)[:, :3, 3])
     test_pair_idxs = []
     index = faiss.IndexFlatL2(3)
-    poses = np.stack(dataset_for_recall.poses).copy()
+    poses = dataset_for_recall.poses
+    if isinstance(poses, list):
+        poses = np.stack(dataset_for_recall.poses).copy()
+    elif isinstance(poses, torch.Tensor):
+        poses = poses.detach().cpu().numpy()
+    # Faiss Index only takes Float32
+    poses = poses.astype(np.float32)
     index.add(poses[:50, :3, 3].copy())
     num_frames_with_loop = 0
     num_frames_with_reverse_loop = 0
@@ -248,7 +257,7 @@ def main_process(gpu, weights_path, dataset, data, sequence=None, num_iters=1, r
             test_pair_idxs.append([I[j], i])
     test_pair_idxs = np.array(test_pair_idxs)
 
-    batch_sampler = BatchSamplePairs(dataset_for_recall, test_pair_idxs, exp_cfg['batch_size'])
+    batch_sampler = BatchSamplePairs(dataset_for_recall, test_pair_idxs, batch_size)
     RecallLoader = torch.utils.data.DataLoader(dataset=dataset_for_recall,
                                                # batch_size=exp_cfg['batch_size'],
                                                num_workers=2,
@@ -258,9 +267,9 @@ def main_process(gpu, weights_path, dataset, data, sequence=None, num_iters=1, r
                                                collate_fn=merge_inputs,
                                                pin_memory=True)
 
-    model = get_model(exp_cfg)
-
-    model.load_state_dict(saved_params['state_dict'], strict=True)
+    # model = get_model(exp_cfg)
+    #
+    # model.load_state_dict(saved_params['state_dict'], strict=True)
 
     # model.train()
     model = model.to(device)
@@ -441,8 +450,8 @@ def main_process(gpu, weights_path, dataset, data, sequence=None, num_iters=1, r
                         pred_transf.append(transformation.detach().cpu())
                         pred_transl.append(transformation[:3, 3].detach().cpu())
                 for i in range(batch_dict['batch_size'] // 2):
-                    pose1 = dataset_for_recall.poses[test_pair_idxs[current_frame+i, 0]]
-                    pose2 = dataset_for_recall.poses[test_pair_idxs[current_frame+i, 1]]
+                    pose1 = poses[test_pair_idxs[current_frame+i, 0]]
+                    pose2 = poses[test_pair_idxs[current_frame+i, 1]]
                     delta_pose = np.linalg.inv(pose1) @ pose2
                     transl_error = torch.tensor(delta_pose[:3, 3]) - pred_transl[i]
                     transl_errors.append(transl_error.norm())
@@ -519,7 +528,7 @@ def main_process(gpu, weights_path, dataset, data, sequence=None, num_iters=1, r
         "rot_mean": rot_mean,
         "rot_std": rot_std,
         "tra": transl_errors,
-        "tra_mean": tra_mean,
+        # "tra_mean": tra_mean,
         "tra_std": tra_std,
         "tra_median": tra_median,
         "success_rate": succ_rate,
@@ -539,7 +548,7 @@ def main_process(gpu, weights_path, dataset, data, sequence=None, num_iters=1, r
         #     save_path = save_path+'_ransac'
 
         print("Saving to ", save_path)
-        with open(f'{save_path}.pickle', 'wb') as f:
+        with open(f'{save_path}', 'wb') as f:
             pickle.dump(save_dict, f)
 
     return save_dict
@@ -551,10 +560,13 @@ if __name__ == '__main__':
                         help='dataset directory')
     parser.add_argument('--weights_path', default='/home/cattaneo/checkpoints/deep_lcd')
     parser.add_argument('--num_iters', type=int, default=1)
+    parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--dataset', type=str, default='kitti')
     parser.add_argument('--sequence', type=str, default=None)
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument('--ransac', action='store_true', default=False)
     parser.add_argument('--icp', action='store_true', default=False)
+    parser.add_argument('--loop_file', type=str, default=None)
     parser.add_argument('--save_path', default="")
     args = vars(parser.parse_args())
 

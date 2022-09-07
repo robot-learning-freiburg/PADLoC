@@ -1,5 +1,4 @@
 import argparse
-import os
 import pickle
 import time
 
@@ -9,34 +8,21 @@ import torch
 import torch.nn.parallel
 import torch.utils.data
 from pcdet.datasets.kitti.kitti_dataset import KittiDataset
-import random
 
-from scipy.spatial import KDTree
 from torch.utils.data.sampler import Sampler, BatchSampler
 from tqdm import tqdm
 
 from datasets.FordCampus import FordCampusDataset
-from datasets.KITTI360Dataset import KITTI3603DPoses
-from datasets.KITTI_data_loader import KITTILoader3DPoses
-from models.get_models import get_model
+from models.get_models import load_model
 from utils.data import merge_inputs
-from datetime import datetime
 from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointnet2_utils import furthest_point_sample
 from utils.geometry import mat2xyzrpy
 import utils.rotation_conversion as RT
+from utils.tools import set_seed
 
 torch.backends.cudnn.benchmark = True
 
 EPOCH = 1
-
-
-def _init_fn(worker_id, epoch=0, seed=0):
-    seed = seed + worker_id + epoch * 100
-    seed = seed % (2**32 - 1)
-    print(f"Init worker {worker_id} with seed {seed}")
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
 
 
 def get_database_embs(model, sample, exp_cfg, device):
@@ -134,25 +120,29 @@ def main_process(gpu, weights_path, args):
     global EPOCH
     rank = gpu
 
+    set_seed(args.seed)
+
     torch.cuda.set_device(gpu)
     device = torch.device(gpu)
 
-    saved_params = torch.load(weights_path, map_location='cpu')
-    exp_cfg = saved_params['config']
-    exp_cfg['batch_size'] = args.batch_size
+    # saved_params = torch.load(weights_path, map_location='cpu')
+    # exp_cfg = saved_params['config']
+    override_cfg = dict(
+        batch_size=args.batch_size,
+    )
 
-    if 'loop_file' not in exp_cfg:
-        exp_cfg['loop_file'] = 'loop_GT'
-    if 'sinkhorn_type' not in exp_cfg:
-        exp_cfg['sinkhorn_type'] = 'flot'
-    if 'shared_embeddings' not in exp_cfg:
-        exp_cfg['shared_embeddings'] = False
-    if 'use_semantic' not in exp_cfg:
-        exp_cfg['use_semantic'] = False
-    if 'use_panoptic' not in exp_cfg:
-        exp_cfg['use_panoptic'] = False
-    if 'noneg' in exp_cfg['loop_file']:
-        exp_cfg['loop_file'] = 'loop_GT_4m'
+    # if 'loop_file' not in exp_cfg:
+    #     exp_cfg['loop_file'] = 'loop_GT'
+    # if 'sinkhorn_type' not in exp_cfg:
+    #     exp_cfg['sinkhorn_type'] = 'flot'
+    # if 'shared_embeddings' not in exp_cfg:
+    #     exp_cfg['shared_embeddings'] = False
+    # if 'use_semantic' not in exp_cfg:
+    #     exp_cfg['use_semantic'] = False
+    # if 'use_panoptic' not in exp_cfg:
+    #     exp_cfg['use_panoptic'] = False
+    # if 'noneg' in exp_cfg['loop_file']:
+    #     exp_cfg['loop_file'] = 'loop_GT_4m'
 
     # current_date = datetime.now()
     #
@@ -167,7 +157,7 @@ def main_process(gpu, weights_path, args):
     # sequences_validation = [exp_cfg['test_sequence']]
     # sequences_training = set(sequences_training) - set(sequences_validation)
     # sequences_training = list(sequences_training)
-    exp_cfg['sinkhorn_iter'] = 5
+    # exp_cfg['sinkhorn_iter'] = 5
 
     dataset_for_recall = FordCampusDataset(args.data, args.seq, without_ground=False)
 
@@ -201,7 +191,7 @@ def main_process(gpu, weights_path, args):
             test_pair_idxs.append([I[j], i])
     test_pair_idxs = np.array(test_pair_idxs)
 
-    batch_sampler = BatchSamplePairs(dataset_for_recall, test_pair_idxs, exp_cfg['batch_size'])
+    batch_sampler = BatchSamplePairs(dataset_for_recall, test_pair_idxs, args.batch_size)
     RecallLoader = torch.utils.data.DataLoader(dataset=dataset_for_recall,
                                                # batch_size=exp_cfg['batch_size'],
                                                num_workers=2,
@@ -211,11 +201,14 @@ def main_process(gpu, weights_path, args):
                                                collate_fn=merge_inputs,
                                                pin_memory=True)
 
-    model = get_model(exp_cfg)
-
-    model.load_state_dict(saved_params['state_dict'], strict=True)
+    # model = get_model(exp_cfg)
+    #
+    # model.load_state_dict(saved_params['state_dict'], strict=True)
 
     # model.train()
+
+    model, exp_cfg = load_model(weights_path, override_cfg_dict=override_cfg, is_training=args.non_deterministic)
+
     model = model.to(device)
 
     local_iter = 0.
@@ -372,9 +365,11 @@ if __name__ == '__main__':
     parser.add_argument('--num_iters', type=int, default=1)
     parser.add_argument('--dataset', type=str, default='kitti')
     parser.add_argument('--seq', type=str, default='1')
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument('--save_path', type=str, default=None)
     parser.add_argument("--batch_size", type=int, default=15)
     parser.add_argument("--positive_distance", type=float, default=10.)
+    parser.add_argument("--non_deterministic", action="store_true")
     args = parser.parse_args()
 
     # if args.device is not None and not args.no_cuda:

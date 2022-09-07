@@ -1,33 +1,26 @@
 import argparse
-import os
 import pickle
 import time
 
-import faiss
 import numpy as np
 import torch
 import torch.nn.parallel
 import torch.utils.data
 import torch.nn.functional as F
 from pcdet.datasets.kitti.kitti_dataset import KittiDataset
-import random
 
-from scipy.spatial import KDTree
-from torch.utils.data.sampler import Sampler, BatchSampler
 from tqdm import tqdm
 
 from datasets.Freiburg import FreiburgRegistrationDataset
-from datasets.KITTI360Dataset import KITTI3603DPoses
-from datasets.KITTI_data_loader import KITTILoader3DPoses
-from models.get_models import get_model
+from models.get_models import load_model
 from models.backbone3D.RandLANet.RandLANet import prepare_randlanet_input
 from models.backbone3D.RandLANet.helper_tool import ConfigSemanticKITTI2
 from utils.data import merge_inputs, Timer
-from datetime import datetime
 from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointnet2_utils import furthest_point_sample
 from utils.geometry import mat2xyzrpy
 import utils.rotation_conversion as RT
 from utils.qcqp_layer import QuadQuatFastSolver
+from utils.tools import set_seed
 
 import open3d as o3d
 if hasattr(o3d, 'pipelines'):
@@ -40,59 +33,59 @@ torch.backends.cudnn.benchmark = True
 EPOCH = 1
 
 
-def _init_fn(worker_id, epoch=0, seed=0):
-    seed = seed + worker_id + epoch * 100
-    seed = seed % (2**32 - 1)
-    print(f"Init worker {worker_id} with seed {seed}")
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-
-
 def main_process(gpu, weights_path, args):
     global EPOCH
     rank = gpu
 
+    set_seed(args.seed)
+
     torch.cuda.set_device(gpu)
     device = torch.device(gpu)
 
-    saved_params = torch.load(weights_path, map_location='cpu')
-    exp_cfg = saved_params['config']
-    exp_cfg['batch_size'] = 2
+    # saved_params = torch.load(weights_path, map_location='cpu')
+    # exp_cfg = saved_params['config']
+    # exp_cfg['batch_size'] = 2
+    #
+    # if 'loop_file' not in exp_cfg:
+    #     exp_cfg['loop_file'] = 'loop_GT'
+    # if 'sinkhorn_type' not in exp_cfg:
+    #     exp_cfg['sinkhorn_type'] = 'unbalanced'
+    # if 'shared_embeddings' not in exp_cfg:
+    #     exp_cfg['shared_embeddings'] = False
+    # if 'use_semantic' not in exp_cfg:
+    #     exp_cfg['use_semantic'] = False
+    # if 'use_panoptic' not in exp_cfg:
+    #     exp_cfg['use_panoptic'] = False
+    # if 'noneg' in exp_cfg['loop_file']:
+    #     exp_cfg['loop_file'] = 'loop_GT_4m'
+    # if 'head' not in exp_cfg:
+    #     exp_cfg['head'] = 'SuperGlue'
+    #
+    # current_date = datetime.now()
 
-    if 'loop_file' not in exp_cfg:
-        exp_cfg['loop_file'] = 'loop_GT'
-    if 'sinkhorn_type' not in exp_cfg:
-        exp_cfg['sinkhorn_type'] = 'unbalanced'
-    if 'shared_embeddings' not in exp_cfg:
-        exp_cfg['shared_embeddings'] = False
-    if 'use_semantic' not in exp_cfg:
-        exp_cfg['use_semantic'] = False
-    if 'use_panoptic' not in exp_cfg:
-        exp_cfg['use_panoptic'] = False
-    if 'noneg' in exp_cfg['loop_file']:
-        exp_cfg['loop_file'] = 'loop_GT_4m'
-    if 'head' not in exp_cfg:
-        exp_cfg['head'] = 'SuperGlue'
-
-    current_date = datetime.now()
+    override_cfg = dict(
+        batch_size=args.batch_size,
+    )
 
     if args.dataset == 'kitti':
-        exp_cfg['test_sequence'] = "08"
+        override_cfg['test_sequence'] = "08"
         sequences_training = ["00", "03", "04", "05", "06", "07", "08", "09"]  # compulsory data in sequence 10 missing
     else:
-        exp_cfg['test_sequence'] = "2013_05_28_drive_0009_sync"
+        override_cfg['test_sequence'] = "2013_05_28_drive_0009_sync"
         sequences_training = ["2013_05_28_drive_0000_sync", "2013_05_28_drive_0002_sync",
                               "2013_05_28_drive_0004_sync", "2013_05_28_drive_0005_sync",
                               "2013_05_28_drive_0006_sync", "2013_05_28_drive_0009_sync"]
-    sequences_validation = [exp_cfg['test_sequence']]
+    sequences_validation = [override_cfg['test_sequence']]
     sequences_training = set(sequences_training) - set(sequences_validation)
     sequences_training = list(sequences_training)
-    exp_cfg['sinkhorn_iter'] = 50
+    override_cfg['sinkhorn_iter'] = 5
 
-    dataset_for_recall = FreiburgRegistrationDataset(args.data, without_ground=exp_cfg['without_ground'])
+    model, exp_cfg = load_model(weights_path, override_cfg_dict=override_cfg, is_training=args.non_deterministic)
 
-    dataset_list_valid = [dataset_for_recall]
+    dataset_for_recall = FreiburgRegistrationDataset(args.data, without_ground=exp_cfg['without_ground'],
+                                                     z_offset=args.z_offset)
+
+    # dataset_list_valid = [dataset_for_recall]
 
     # get_dataset3d_mean_std(training_dataset)
 
@@ -104,9 +97,9 @@ def main_process(gpu, weights_path, args):
                                                collate_fn=merge_inputs,
                                                pin_memory=True)
 
-    model = get_model(exp_cfg)
+    # model = get_model(exp_cfg)
 
-    model.load_state_dict(saved_params['state_dict'], strict=True)
+    # model.load_state_dict(saved_params['state_dict'], strict=True)
 
     # model.train()
     model = model.to(device)
@@ -323,33 +316,55 @@ def main_process(gpu, weights_path, args):
 
     transl_errors = np.array(transl_errors)
     yaw_error = np.array(yaw_error)
+
+    valid = yaw_error <= 5.
+    valid = valid & (np.array(transl_errors) <= 2.)
+    succ_rate = valid.sum() / valid.shape[0]
+    rte_suc = transl_errors[valid].mean()
+    rre_suc = yaw_error[valid].mean()
+
+    save_dict = {
+        'rot': yaw_error,
+        'transl': transl_errors,
+        "Mean rotation error": yaw_error.mean(),
+        "Median rotation error": np.median(yaw_error),
+        "STD rotation error": yaw_error.std(),
+        "Mean translation error": transl_errors.mean(),
+        "Median translation error": np.median(transl_errors),
+        "STD translation error": transl_errors.std(),
+        "Success Rate": succ_rate,
+        "RTE": rte_suc,
+        "RRE": rre_suc,
+    }
+
     print("Mean rotation error: ", yaw_error.mean())
     print("Median rotation error: ", np.median(yaw_error))
     print("STD rotation error: ", yaw_error.std())
     print("Mean translation error: ", transl_errors.mean())
     print("Median translation error: ", np.median(transl_errors))
     print("STD translation error: ", transl_errors.std())
-    save_dict = {'rot': yaw_error, 'transl': transl_errors}
-    # save_path = f'./results_for_paper/lcdnet00+08_{exp_cfg["test_sequence"]}'/
-    if '360' in weights_path:
-        save_path = f'./results_for_paper/lcdnet++_freiburg'
-    elif '00+08' in weights_path:
-        save_path = f'./results_for_paper/lcdnet00+08_freiburg'
-    else:
-        save_path = f'./results_for_paper/lcdnet_freiburg'
-    if args.icp:
-        save_path = save_path+'_icp'
-    elif args.ransac:
-        save_path = save_path+'_ransac'
-    print("Saving to ", save_path)
-    with open(f'{save_path}.pickle', 'wb') as f:
-        pickle.dump(save_dict, f)
-    valid = yaw_error <= 5.
-    valid = valid & (np.array(transl_errors) <= 2.)
-    succ_rate = valid.sum() / valid.shape[0]
-    rte_suc = transl_errors[valid].mean()
-    rre_suc = yaw_error[valid].mean()
+    # save_dict = {'rot': yaw_error, 'transl': transl_errors}
+    # # save_path = f'./results_for_paper/lcdnet00+08_{exp_cfg["test_sequence"]}'/
+    # if '360' in weights_path:
+    #     save_path = f'./results_for_paper/lcdnet++_freiburg'
+    # elif '00+08' in weights_path:
+    #     save_path = f'./results_for_paper/lcdnet00+08_freiburg'
+    # else:
+    #     save_path = f'./results_for_paper/lcdnet_freiburg'
+    # if args.icp:
+    #     save_path = save_path+'_icp'
+    # elif args.ransac:
+    #     save_path = save_path+'_ransac'
+    # print("Saving to ", save_path)
+    # with open(f'{save_path}.pickle', 'wb') as f:
+    #     pickle.dump(save_dict, f)
+
     print(f"Success Rate: {succ_rate}, RTE: {rte_suc}, RRE: {rre_suc}")
+
+    if args.save_path:
+        print("Saving to ", args.save_path)
+        with open(args.save_path, 'wb') as f:
+            pickle.dump(save_dict, f)
 
 
 if __name__ == '__main__':
@@ -359,8 +374,13 @@ if __name__ == '__main__':
     parser.add_argument('--weights_path', default='/home/cattaneo/checkpoints/deep_lcd')
     parser.add_argument('--num_iters', type=int, default=1)
     parser.add_argument('--dataset', type=str, default='kitti')
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument('--ransac', action='store_true', default=False)
     parser.add_argument('--icp', action='store_true', default=False)
+    parser.add_argument('--save_path', type=str, default=None)
+    parser.add_argument('--batch_size', type=int, default=6)
+    parser.add_argument("--z_offset", type=float, default=0.283)
+    parser.add_argument("--non_deterministic", action="store_true")
     args = parser.parse_args()
 
     # if args.device is not None and not args.no_cuda:

@@ -128,16 +128,30 @@ def get_model(exp_cfg, is_training=True):
     return model
 
 
-def load_model(weights_path, override_cfg_dict=None):
+def load_model(weights_path, override_cfg_dict=None, is_training=False, strict_load=False):
 
     saved_params = torch.load(weights_path, map_location='cpu')
 
     exp_cfg = saved_params['config']
 
+    # Set some default values in case they are not in the configuration
+    # if 'loop_file' not in exp_cfg:
+    #     exp_cfg['loop_file'] = 'loop_GT'
+    # if 'sinkhorn_type' not in exp_cfg:
+    #     exp_cfg['sinkhorn_type'] = 'flot'
+    # if 'shared_embeddings' not in exp_cfg:
+    #     exp_cfg['shared_embeddings'] = False
+    # if 'use_semantic' not in exp_cfg:
+    #     exp_cfg['use_semantic'] = False
+    # if 'use_panoptic' not in exp_cfg:
+    #     exp_cfg['use_panoptic'] = False
+    # if 'noneg' in exp_cfg['loop_file']:
+    #     exp_cfg['loop_file'] = 'loop_GT_4m'
+
     if override_cfg_dict is not None:
         exp_cfg.update(override_cfg_dict)
 
-    model = get_model(exp_cfg, is_training=False)
+    model = get_model(exp_cfg, is_training=is_training)
 
     renamed_dict = OrderedDict()
     for key in saved_params['state_dict']:
@@ -155,8 +169,8 @@ def load_model(weights_path, override_cfg_dict=None):
                 if len(renamed_dict[key].shape) == 5:
                     renamed_dict[key] = renamed_dict[key].permute(-1, 0, 1, 2, 3)
 
-    res = model.load_state_dict(renamed_dict, strict=False)
-    if len(res[0]) > 0:
+    res = model.load_state_dict(renamed_dict, strict=strict_load)
+    if not strict_load and len(res[0]) > 0:
         print(f"WARNING: MISSING {len(res[0])} KEYS, MAYBE WEIGHTS LOADING FAILED")
 
     return model, exp_cfg

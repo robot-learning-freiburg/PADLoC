@@ -1,5 +1,4 @@
 import argparse
-import os
 import pickle
 import time
 
@@ -12,23 +11,19 @@ import torch.nn.functional as F
 from datasets.MulRan import MulRan
 from datasets.Boreas import Boreas
 from pcdet.datasets.kitti.kitti_dataset import KittiDataset
-import random
 
-from scipy.spatial import KDTree
 from torch.utils.data.sampler import Sampler, BatchSampler
 from tqdm import tqdm
 
-from datasets.KITTI360Dataset import KITTI3603DPoses
-from datasets.KITTI_data_loader import KITTILoader3DPoses
-from models.get_models import get_model
+from models.get_models import load_model
 from models.backbone3D.RandLANet.RandLANet import prepare_randlanet_input
 from models.backbone3D.RandLANet.helper_tool import ConfigSemanticKITTI2
 from utils.data import merge_inputs, Timer
-from datetime import datetime
 from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointnet2_utils import furthest_point_sample
 from utils.geometry import mat2xyzrpy
 import utils.rotation_conversion as RT
 from utils.qcqp_layer import QuadQuatFastSolver
+from utils.tools import set_seed
 # from evaluation_comparison.TEASER import find_correspondences, get_teaser_solver, Rt2T, find_correspondences_faiss
 
 import open3d as o3d
@@ -40,15 +35,6 @@ else:
 torch.backends.cudnn.benchmark = True
 
 EPOCH = 1
-
-
-def _init_fn(worker_id, epoch=0, seed=0):
-	seed = seed + worker_id + epoch * 100
-	seed = seed % (2**32 - 1)
-	print(f"Init worker {worker_id} with seed {seed}")
-	torch.manual_seed(seed)
-	np.random.seed(seed)
-	random.seed(seed)
 
 
 def get_database_embs(model, sample, exp_cfg, device):
@@ -148,6 +134,7 @@ def main_process(gpu, weights_path, *,
 				 seq1=None,
 				 seq2=None,
 				 num_iters=1,
+				 seed=0,
 				 do_ransac=False,
 				 do_icp=False,
 				 save_path=None,
@@ -157,31 +144,34 @@ def main_process(gpu, weights_path, *,
 	global EPOCH
 	rank = gpu
 
+	set_seed(seed)
+
 	torch.cuda.set_device(gpu)
 	device = torch.device("cuda")
 
-	saved_params = torch.load(weights_path, map_location='cpu')
-	exp_cfg = saved_params['config']
-	exp_cfg['batch_size'] = batch_size
-	exp_cfg["pvrcnn_cfg_file"] = "./models/backbone3D/pv_rcnn_boreas.yaml"
+	# saved_params = torch.load(weights_path, map_location='cpu')
+	# exp_cfg = saved_params['config']
+	override_cfg = dict(
+		batch_size=batch_size,
+	)
 
-	if 'loop_file' not in exp_cfg:
-		exp_cfg['loop_file'] = 'loop_GT'
-	if 'sinkhorn_type' not in exp_cfg:
-		exp_cfg['sinkhorn_type'] = 'flot'
-	if 'shared_embeddings' not in exp_cfg:
-		exp_cfg['shared_embeddings'] = False
-	if 'use_semantic' not in exp_cfg:
-		exp_cfg['use_semantic'] = False
-	if 'use_panoptic' not in exp_cfg:
-		exp_cfg['use_panoptic'] = False
-	if 'noneg' in exp_cfg['loop_file']:
-		exp_cfg['loop_file'] = 'loop_GT_4m'
-	if 'head' not in exp_cfg:
-		exp_cfg['head'] = 'SuperGlue'
-	# exp_cfg['without_ground'] = False
+	# if 'loop_file' not in exp_cfg:
+	# 	exp_cfg['loop_file'] = 'loop_GT'
+	# if 'sinkhorn_type' not in exp_cfg:
+	# 	exp_cfg['sinkhorn_type'] = 'flot'
+	# if 'shared_embeddings' not in exp_cfg:
+	# 	exp_cfg['shared_embeddings'] = False
+	# if 'use_semantic' not in exp_cfg:
+	# 	exp_cfg['use_semantic'] = False
+	# if 'use_panoptic' not in exp_cfg:
+	# 	exp_cfg['use_panoptic'] = False
+	# if 'noneg' in exp_cfg['loop_file']:
+	# 	exp_cfg['loop_file'] = 'loop_GT_4m'
+	# if 'head' not in exp_cfg:
+	# 	exp_cfg['head'] = 'SuperGlue'
+	# # exp_cfg['without_ground'] = False
 
-	current_date = datetime.now()
+	# current_date = datetime.now()
 
 	if dataset == 'mulran':
 		seq1 = seq1 if seq1 is not None else "Riverside01"
@@ -223,7 +213,7 @@ def main_process(gpu, weights_path, *,
 	test_pair_idxs = np.array(test_pair_idxs)
 	test_pair_idxs_concat = np.array(test_pair_idxs_concat)
 
-	batch_sampler = BatchSamplePairs(concat_dataset, test_pair_idxs_concat, exp_cfg['batch_size'])
+	batch_sampler = BatchSamplePairs(concat_dataset, test_pair_idxs_concat, batch_size=batch_size)
 	RecallLoader = torch.utils.data.DataLoader(dataset=concat_dataset,
 											   # batch_size=exp_cfg['batch_size'],
 											   num_workers=2,
@@ -233,17 +223,19 @@ def main_process(gpu, weights_path, *,
 											   collate_fn=merge_inputs,
 											   pin_memory=True)
 
-	model = get_model(exp_cfg)
+	# model = get_model(exp_cfg)
+	#
+	# model.load_state_dict(saved_params['state_dict'], strict=True)
 
-	model.load_state_dict(saved_params['state_dict'], strict=True)
+	model, exp_cfg = load_model(weights_path, override_cfg_dict=override_cfg)
 
 	# model.train()
 	model = model.to(device)
 
-	local_iter = 0.
-	transl_error_sum = 0
-	yaw_error_sum = 0
-	emb_list = []
+	# local_iter = 0.
+	# transl_error_sum = 0
+	# yaw_error_sum = 0
+	# emb_list = []
 	rot_errors = []
 	transl_errors = []
 	yaw_error = []
@@ -535,7 +527,9 @@ if __name__ == '__main__':
 						help='dataset directory')
 	parser.add_argument('--weights_path', default='/home/cattaneo/checkpoints/deep_lcd')
 	parser.add_argument('--num_iters', type=int, default=1)
+	parser.add_argument('--batch_size', type=int, default=6)
 	parser.add_argument('--dataset', type=str, default='kitti')
+	parser.add_argument("--seed", type=int, default=0)
 	parser.add_argument('--do_ransac', action='store_true', default=False)
 	parser.add_argument('--do_teaser', action='store_true', default=False)
 	parser.add_argument('--do_icp', action='store_true', default=False)

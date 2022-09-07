@@ -5,10 +5,8 @@ from datasets.Boreas import Boreas
 import os
 import pickle
 import time
-from collections import OrderedDict
 
 import faiss
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.parallel
@@ -16,20 +14,16 @@ import torch.utils.data
 from pcdet.datasets.kitti.kitti_dataset import KittiDataset
 import random
 
-from sklearn.metrics import precision_recall_curve, average_precision_score
-from sklearn.neighbors import KDTree
 from torch.utils.data.sampler import Sampler, BatchSampler
 from tqdm import tqdm
 
-from datasets.Freiburg import FreiburgDataset
-from datasets.KITTI360Dataset import KITTI3603DPoses
-from datasets.KITTI_data_loader import KITTILoader3DPoses
-from evaluation_comparison.plot_PR_curve import compute_AP, compute_PR_pairs
-from models.get_models import get_model
+from evaluation_comparison.plot_PR_curve import compute_AP
+from models.get_models import load_model
 from models.backbone3D.RandLANet.RandLANet import prepare_randlanet_input
 from models.backbone3D.RandLANet.helper_tool import ConfigSemanticKITTI2
 from utils.data import merge_inputs
-from datetime import datetime
+from utils.tools import set_seed
+
 from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointnet2_utils import furthest_point_sample
 
 from torch.nn.parallel import DistributedDataParallel
@@ -39,15 +33,6 @@ import torch.multiprocessing as mp
 torch.backends.cudnn.benchmark = True
 
 EPOCH = 1
-
-
-def _init_fn(worker_id, epoch=0, seed=0):
-	seed = seed + worker_id + epoch * 100
-	seed = seed % (2**32 - 1)
-	print(f"Init worker {worker_id} with seed {seed}")
-	torch.manual_seed(seed)
-	np.random.seed(seed)
-	random.seed(seed)
 
 
 def compute_PR_mulran(pair_dist, poses1, poses3, is_distance=True, ignore_last=False):
@@ -247,17 +232,21 @@ class BatchSamplePairs(BatchSampler):
 			yield current_batch
 
 
-def main_process(gpu, weights_path, common_seed, world_size, dataset_path,
+def main_process(gpu, weights_path, world_size, dataset_path,
 				 dataset="boreas",
 				 seq1=None,
 				 seq2=None,
 				 num_iters=1,
+				 seed=0,
 				 batch_size=15,
 				 pr_filename=None,
 				 stats_filename=None
 				 ):
 	global EPOCH
 	rank = gpu
+
+	set_seed(seed)
+
 	dist.init_process_group(
 		backend='nccl',
 		init_method='env://',
@@ -268,29 +257,30 @@ def main_process(gpu, weights_path, common_seed, world_size, dataset_path,
 	torch.cuda.set_device(gpu)
 	device = torch.device(gpu)
 
-	saved_params = torch.load(weights_path, map_location='cpu')
+	# saved_params = torch.load(weights_path, map_location='cpu')
 
 	# asd = torch.load('/home/cattaneod/rpmnet_08_4m_shared.tar', map_location='cpu')
 
 	# exp_cfg = saved_params['config']
-	exp_cfg = saved_params['config']
-	exp_cfg['batch_size'] = batch_size
-	exp_cfg["pvrcnn_cfg_file"] = "./models/backbone3D/pv_rcnn_boreas.yaml"
+	# exp_cfg = saved_params['config']
+	override_cfg = {
+		"batch_size": batch_size,
+	}
 
-	if 'loop_file' not in exp_cfg:
-		exp_cfg['loop_file'] = 'loop_GT'
-	if 'sinkhorn_type' not in exp_cfg:
-		exp_cfg['sinkhorn_type'] = 'flot'
-	if 'shared_embeddings' not in exp_cfg:
-		exp_cfg['shared_embeddings'] = False
-	if 'use_semantic' not in exp_cfg:
-		exp_cfg['use_semantic'] = False
-	if 'use_panoptic' not in exp_cfg:
-		exp_cfg['use_panoptic'] = False
-	if 'noneg' in exp_cfg['loop_file']:
-		exp_cfg['loop_file'] = 'loop_GT_4m'
-	if 'head' not in exp_cfg:
-		exp_cfg['head'] = 'SuperGlue'
+	# if 'loop_file' not in exp_cfg:
+	# 	exp_cfg['loop_file'] = 'loop_GT'
+	# if 'sinkhorn_type' not in exp_cfg:
+	# 	exp_cfg['sinkhorn_type'] = 'flot'
+	# if 'shared_embeddings' not in exp_cfg:
+	# 	exp_cfg['shared_embeddings'] = False
+	# if 'use_semantic' not in exp_cfg:
+	# 	exp_cfg['use_semantic'] = False
+	# if 'use_panoptic' not in exp_cfg:
+	# 	exp_cfg['use_panoptic'] = False
+	# if 'noneg' in exp_cfg['loop_file']:
+	# 	exp_cfg['loop_file'] = 'loop_GT_4m'
+	# if 'head' not in exp_cfg:
+	# 	exp_cfg['head'] = 'SuperGlue'
 	# exp_cfg['without_ground'] = False
 
 	if dataset == 'mulran':
@@ -310,50 +300,52 @@ def main_process(gpu, weights_path, common_seed, world_size, dataset_path,
 		dataset_for_recall1,
 		num_replicas=world_size,
 		rank=rank,
-		seed=common_seed,
+		seed=seed,
 		shuffle=False
 	)
 	dataset3_sampler = torch.utils.data.distributed.DistributedSampler(
 		dataset_for_recall3,
 		num_replicas=world_size,
 		rank=rank,
-		seed=common_seed,
+		seed=seed,
 		shuffle=False
 	)
 
 
 	MapLoader = torch.utils.data.DataLoader(dataset=dataset_for_recall1,
 											sampler=dataset1_sampler,
-											batch_size=exp_cfg['batch_size'],
+											batch_size=batch_size,
 											num_workers=2,
 											collate_fn=merge_inputs,
 											pin_memory=True)
 	MapLoader3 = torch.utils.data.DataLoader(dataset=dataset_for_recall3,
 											 sampler=dataset3_sampler,
-											 batch_size=exp_cfg['batch_size'],
+											 batch_size=batch_size,
 											 num_workers=2,
 											 collate_fn=merge_inputs,
 											 pin_memory=True)
 
-	model = get_model(exp_cfg, is_training=False)
-	renamed_dict = OrderedDict()
-	for key in saved_params['state_dict']:
-		if not key.startswith('module'):
-			renamed_dict = saved_params['state_dict']
-			break
-		else:
-			renamed_dict[key[7:]] = saved_params['state_dict'][key]
+	# model = get_model(exp_cfg, is_training=False)
+	# renamed_dict = OrderedDict()
+	# for key in saved_params['state_dict']:
+	# 	if not key.startswith('module'):
+	# 		renamed_dict = saved_params['state_dict']
+	# 		break
+	# 	else:
+	# 		renamed_dict[key[7:]] = saved_params['state_dict'][key]
+	#
+	# res = model.load_state_dict(renamed_dict, strict=False)
+	# if len(res[0]) > 0:
+	# 	print(f"WARNING: MISSING {len(res[0])} KEYS, MAYBE WEIGHTS LOADING FAILED")
 
-	res = model.load_state_dict(renamed_dict, strict=False)
-	if len(res[0]) > 0:
-		print(f"WARNING: MISSING {len(res[0])} KEYS, MAYBE WEIGHTS LOADING FAILED")
+	model, exp_cfg = load_model(weights_path, override_cfg_dict=override_cfg)
 
 	model.train()
 	model = DistributedDataParallel(model.to(device), device_ids=[rank], output_device=rank, find_unused_parameters=True)
 
-	local_iter = 0.
-	transl_error_sum = 0
-	yaw_error_sum = 0
+	# local_iter = 0.
+	# transl_error_sum = 0
+	# yaw_error_sum = 0
 	emb_list_map = []
 	emb_list_map3 = []
 	rot_errors = []
@@ -536,7 +528,7 @@ if __name__ == '__main__':
 	parser.add_argument('--dataset', type=str, default='boreas')
 	parser.add_argument('--seq1', type=str, default=None)
 	parser.add_argument('--seq2', type=str, default=None)
-	parser.add_argument("--common_seed", type=int, default=42)
+	parser.add_argument("--seed", type=int, default=0)
 	parser.add_argument("--gpu_count", type=int, default=def_gpu_count)
 	parser.add_argument("--pr_filename", type=str, default=None)
 	parser.add_argument("--stats_filename", type=str, default=None)
@@ -547,6 +539,6 @@ if __name__ == '__main__':
 
 	args.gpu_count = torch.cuda.device_count()
 	mp.spawn(main_process, nprocs=args.gpu_count, args=(
-		args.weights_path, 42, args.gpu_count, args.data, args.dataset, args.seq1, args.seq2, args.num_iter,
-		args.batch_size, args.pr_filename, args.stats_filename
+		args.weights_path, args.gpu_count, args.data, args.dataset, args.seq1, args.seq2, args.num_iter,
+		args.seed, args.batch_size, args.pr_filename, args.stats_filename
 	))

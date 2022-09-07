@@ -15,6 +15,7 @@ from models.get_models import load_model
 from utils.data import merge_inputs, Timer
 from utils.geometry import mat2xyzrpy
 import utils.rotation_conversion as rot
+from utils.tools import set_seed
 
 
 def eval_model(gpu, weights_path, *,
@@ -23,10 +24,14 @@ def eval_model(gpu, weights_path, *,
                seq2=None,
                stride=1,
                num_iters=1,
-               batch_size=2):
+               seed=0,
+               batch_size=2,
+               non_deterministic=False):
 
     torch.cuda.set_device(gpu)
     device = torch.device("cuda")
+
+    set_seed(seed)
 
     seq1 = seq1 if seq1 is not None else 2
     seq2 = seq2 if seq2 is not None else 3
@@ -73,7 +78,7 @@ def eval_model(gpu, weights_path, *,
                                                 pin_memory=True)
 
     override_cfg = {"batch_size": batch_size}
-    model, exp_cfg = load_model(weights_path, override_cfg)
+    model, exp_cfg = load_model(weights_path, override_cfg_dict=override_cfg, is_training=non_deterministic)
 
     model = model.to(device)
 
@@ -199,10 +204,12 @@ def cli_args():
     parser.add_argument("--seq1", type=int, default=2)
     parser.add_argument("--seq2", type=int, default=3)
     parser.add_argument("--stride", type=int, default=1)
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num_iters", type=int, default=1)
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--batch_size", type=int, default=25)
     parser.add_argument("--save_path", type=str, default=None)
+    parser.add_argument("--non_deterministic", action="store_true")
 
     args = parser.parse_args()
 
