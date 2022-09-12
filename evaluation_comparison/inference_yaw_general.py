@@ -447,7 +447,7 @@ def main_process(gpu, weights_path, dataset, data, batch_size=8, sequence=None, 
                             transformation = torch.tensor(result2.transformation.copy())
                         yaw_preds[test_pair_idxs[current_frame + i, 0], test_pair_idxs[current_frame + i, 1]] = \
                             mat2xyzrpy(transformation)[-1].item()
-                        pred_transf.append(transformation.detach().cpu())
+                        pred_transf.append(transformation.inverse().detach().cpu())
                         pred_transl.append(transformation[:3, 3].detach().cpu())
                 for i in range(batch_dict['batch_size'] // 2):
                     pose1 = poses[test_pair_idxs[current_frame+i, 0]]
@@ -528,7 +528,7 @@ def main_process(gpu, weights_path, dataset, data, batch_size=8, sequence=None, 
         "rot_mean": rot_mean,
         "rot_std": rot_std,
         "tra": transl_errors,
-        # "tra_mean": tra_mean,
+        "tra_mean": tra_mean,
         "tra_std": tra_std,
         "tra_median": tra_median,
         "success_rate": succ_rate,
