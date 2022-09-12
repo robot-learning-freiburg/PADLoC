@@ -1,6 +1,7 @@
 import argparse
 import pickle
 import time
+from typing import Callable, List, Optional
 
 import faiss
 import numpy as np
@@ -19,6 +20,12 @@ from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointne
 from utils.geometry import mat2xyzrpy
 import utils.rotation_conversion as RT
 from utils.tools import set_seed
+
+import open3d as o3d
+if hasattr(o3d, 'pipelines'):
+    reg_module = o3d.pipelines.registration
+else:
+    reg_module = o3d.registration
 
 torch.backends.cudnn.benchmark = True
 
@@ -114,6 +121,138 @@ class BatchSamplePairs(BatchSampler):
             for i in range(diff//2):
                 current_batch.append(self.pairs[self.count+i, 1])
             yield current_batch
+
+
+def ransac_registration(*,
+                        anc_coords: torch.Tensor,
+                        anc_feats: torch.Tensor,
+                        pos_coords: torch.Tensor,
+                        pos_feats: torch.Tensor,
+                        initial_transformation: Optional[torch.Tensor] = None,
+                        ) -> torch.Tensor:
+
+    pcd1 = o3d.geometry.PointCloud()
+    pcd1.points = o3d.utility.Vector3dVector(anc_coords.cpu().numpy())
+    pcd2 = o3d.geometry.PointCloud()
+    pcd2.points = o3d.utility.Vector3dVector(pos_coords.cpu().numpy())
+    pcd1_feat = reg_module.Feature()
+    pcd1_feat.data = anc_feats.permute(0, 1).cpu().numpy()
+    pcd2_feat = reg_module.Feature()
+    pcd2_feat.data = pos_feats.permute(0, 1).cpu().numpy()
+
+    torch.cuda.synchronize()
+    # time_ransac.tic()
+    try:
+        result = reg_module.registration_ransac_based_on_feature_matching(
+            pcd2, pcd1, pcd2_feat, pcd1_feat, True,
+            0.6,
+            reg_module.TransformationEstimationPointToPoint(False),
+            3, [],
+            reg_module.RANSACConvergenceCriteria(5000))
+    except:
+        result = reg_module.registration_ransac_based_on_feature_matching(
+            pcd2, pcd1, pcd2_feat, pcd1_feat,
+            0.6,
+            reg_module.TransformationEstimationPointToPoint(False),
+            3, [],
+            reg_module.RANSACConvergenceCriteria(5000))
+
+    # time_ransac.toc()
+    transformation = torch.tensor(result.transformation.copy())
+    return transformation
+
+
+def icp_registration(*,
+                     anc_coordinates: torch.Tensor,
+                     pos_coordinates: torch.Tensor,
+                     initial_transformation: torch.Tensor
+                     ) -> torch.Tensor:
+
+    p1 = o3d.geometry.PointCloud()
+    p1.points = o3d.utility.Vector3dVector(anc_coordinates.cpu().numpy())
+    p2 = o3d.geometry.PointCloud()
+    p2.points = o3d.utility.Vector3dVector(pos_coordinates.cpu().numpy())
+
+    # time_icp.tic()
+    result = reg_module.registration_icp(
+        p2, p1, 0.1, initial_transformation.cpu().numpy(),
+        reg_module.TransformationEstimationPointToPoint())
+    # time_icp.toc()
+
+    transformation = torch.tensor(result.transformation.copy())
+
+    return transformation
+
+
+def batch_coord_feat_registration(*,
+                                  reg_func: Callable,
+                                  batch_coords: torch.Tensor,
+                                  batch_feats: torch.Tensor,
+                                  batch_size: int,
+                                  initial_transformations: Optional[torch.Tensor] = None,
+                                  ) -> torch.Tensor:
+    transformations = []
+    for i in range(batch_size // 2):
+        coords1 = batch_coords[i]
+        coords2 = batch_coords[i + batch_size // 2]
+        feat1 = batch_feats[i]
+        feat2 = batch_feats[i + batch_size // 2]
+
+        if initial_transformations is not None:
+            initial_transformation = initial_transformations[i]
+        else:
+            initial_transformation = None
+
+        transformation = reg_func(anc_coords=coords1[:, 1:], anc_feats=feat1,
+                                  pos_coords=coords2[:, 1:], pos_feats=feat2,
+                                  initial_transformation=initial_transformation)
+
+        transformations.append(transformation)
+    return torch.stack(transformations)
+
+
+def batch_coord_registration(*,
+                             reg_func: Callable,
+                             batch_coords: torch.Tensor,
+                             batch_size: int,
+                             initial_transformations: Optional[torch.Tensor] = None,
+                             ) -> torch.Tensor:
+    transformations = []
+    for i in range(batch_size // 2):
+        coords1 = batch_coords[i]
+        coords2 = batch_coords[i + batch_size // 2]
+
+        if initial_transformations is not None:
+            initial_transformation = initial_transformations[i]
+        else:
+            initial_transformation = None
+
+        transformation = reg_func(anc_coords=coords1[:, 1:], pos_coords=coords2[:, 1:],
+                                  initial_transformation=initial_transformation)
+
+        transformations.append(transformation)
+    return torch.stack(transformations)
+
+
+def batch_ransac_registration(*,
+                              batch_coords: torch.Tensor,
+                              batch_feats: torch.Tensor,
+                              batch_size: int,
+                              initial_transformations: Optional[torch.Tensor] = None,
+                              ) -> torch.Tensor:
+    return batch_coord_feat_registration(reg_func=ransac_registration,
+                                         batch_coords=batch_coords, batch_feats=batch_feats,
+                                         batch_size=batch_size,
+                                         initial_transformations=initial_transformations,
+                                         )
+
+def batch_icp_registration(*,
+                           batch_coords: torch.Tensor,
+                           batch_size: int,
+                           initial_transformations: Optional[torch.Tensor] = None,
+                           ) -> torch.Tensor:
+    return batch_coord_registration(reg_func=icp_registration, batch_coords=batch_coords, batch_size=batch_size,
+                                    initial_transformations=initial_transformations)
 
 
 def main_process(gpu, weights_path, args):
@@ -270,11 +409,24 @@ def main_process(gpu, weights_path, args):
 
                 batch_dict = model(model_in, metric_head=True)
 
-                transformation = batch_dict['transformation']
-                homogeneous = torch.tensor([0., 0., 0., 1.]).repeat(transformation.shape[0], 1, 1).to(transformation.device)
-                transformation = torch.cat((transformation, homogeneous), dim=1)
-                transformation = transformation.inverse()
-                for i in range(batch_dict['transformation'].shape[0]):
+                if exp_cfg['rot_representation'].startswith('6dof') and not args.ransac:
+                    transformation = batch_dict['transformation']
+                    homogeneous = torch.tensor([0., 0., 0., 1.]).repeat(transformation.shape[0], 1, 1).to(transformation.device)
+                    transformation = torch.cat((transformation, homogeneous), dim=1)
+                    transformation = transformation.inverse()
+
+                elif args.ransac:
+                    coords = batch_dict['point_coords'].view(batch_dict['batch_size'], -1, 4)
+                    feats = batch_dict['point_features'].squeeze(-1)
+                    transformation = batch_ransac_registration(batch_coords=coords, batch_feats=feats,
+                                                               batch_size=batch_dict["batch_size"])
+
+                if args.icp:
+                    coords = batch_dict['point_coords'].view(batch_dict['batch_size'], -1, 4)
+                    transformation = batch_icp_registration(batch_coords=coords, batch_size=batch_dict["batch_size"],
+                                                            initial_transformations=transformation)
+
+                for i in range(transformation.shape[0]):
                     yaw_preds[test_pair_idxs[current_frame, 0], test_pair_idxs[current_frame, 1]] = mat2xyzrpy(transformation[i])[-1].item()
                     pose1 = dataset_for_recall.poses[test_pair_idxs[current_frame, 0]]
                     pose2 = dataset_for_recall.poses[test_pair_idxs[current_frame, 1]]
@@ -366,6 +518,8 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='kitti')
     parser.add_argument('--seq', type=str, default='1')
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument('--ransac', action='store_true', default=False)
+    parser.add_argument('--icp', action='store_true', default=False)
     parser.add_argument('--save_path', type=str, default=None)
     parser.add_argument("--batch_size", type=int, default=15)
     parser.add_argument("--positive_distance", type=float, default=10.)
