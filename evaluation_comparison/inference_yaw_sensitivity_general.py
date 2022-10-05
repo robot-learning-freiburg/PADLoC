@@ -14,6 +14,8 @@ from scipy.stats import circmean
 from torch.utils.data.sampler import BatchSampler
 from tqdm import tqdm
 
+from evaluation_comparison.metrics.registration import batch_icp_registration, batch_ransac_registration,\
+    get_ransac_features
 from datasets.KITTI360Dataset import KITTI3603DPoses
 from datasets.KITTI_data_loader import KITTILoader3DPoses
 from models.get_models import load_model
@@ -128,7 +130,14 @@ def preprocess_sample(sample, model, exp_cfg, device):
     return model_in
 
 
-def eval_batch(model, exp_cfg, sample, batch_gt_poses, device):
+def get_tra_rot(transformation):
+    tra_rot = [mat2xyzrpy(t) for t in transformation]
+    tra = [torch.linalg.norm(t[:3]).detach().cpu().item() for t in tra_rot]
+    yaw = [torch.rad2deg(t[-1]).detach().cpu().item() for t in tra_rot]
+    return tra, yaw
+
+
+def eval_batch(model, exp_cfg, sample, batch_gt_tf_p2a, device, do_ransac=False, do_icp=False):
     model.eval()
     with torch.no_grad():
 
@@ -141,18 +150,27 @@ def eval_batch(model, exp_cfg, sample, batch_gt_poses, device):
         if not exp_cfg['rot_representation'].startswith('6dof'):
             raise NotImplementedError
 
-        transformation = batch_dict['transformation']
-        homogeneous = torch.tensor([0., 0., 0., 1.]).repeat(transformation.shape[0], 1, 1).to(transformation.device)
-        transformation = torch.cat((transformation, homogeneous), dim=1)
-        pred_xyzrpy = [mat2xyzrpy(t) for t in transformation]
-        pred_tra = [torch.linalg.norm(t[:3]).detach().cpu().item() for t in pred_xyzrpy]
-        pred_yaw = [torch.rad2deg(t[-1]).detach().cpu().item() for t in pred_xyzrpy]
-        transformation = transformation.inverse()
+        pred_tf_a2p = batch_dict['transformation']
+        homogeneous = torch.tensor([0., 0., 0., 1.]).repeat(pred_tf_a2p.shape[0], 1, 1).to(pred_tf_a2p.device)
+        pred_tf_a2p = torch.cat((pred_tf_a2p, homogeneous), dim=1)
 
-        rel_pose_err = batch_gt_poses @ transformation
-        err_xyzrpy = [mat2xyzrpy(t) for t in rel_pose_err]
-        err_tra = [torch.linalg.norm(t[:3]).detach().cpu().item() for t in err_xyzrpy]
-        err_yaw = [torch.rad2deg(t[-1]).detach().cpu().item() for t in err_xyzrpy]
+        coords = batch_dict["point_coords"].view(batch_dict['batch_size'], -1, 4)
+
+        if do_ransac:
+            feats = get_ransac_features(batch_dict, model=model)
+
+            pred_tf_a2p = batch_ransac_registration(batch_coords=coords, batch_feats=feats,
+                                                    batch_size=batch_dict["batch_size"]).to(device=device,
+                                                                                            dtype=torch.float32)
+
+        if do_icp:
+            pred_tf_a2p = batch_icp_registration(batch_coords=coords, batch_size=batch_dict["batch_size"],
+                                                 initial_transformations=pred_tf_a2p)
+
+        pred_tra, pred_yaw = get_tra_rot(pred_tf_a2p)
+
+        rel_pose_err = pred_tf_a2p @ batch_gt_tf_p2a
+        err_tra, err_yaw = get_tra_rot(rel_pose_err)
 
         batch_size = batch_dict["batch_size"]
 
@@ -230,6 +248,7 @@ def save_stats(stats, path):
 
 def main_process(gpu, weights_path, dataset, data, batch_size=8, sequence=None, loop_file=None,
                  seed=0,
+                 do_ransac=False, do_icp=False,
                  save_path=None):
 
     set_seed(seed)
@@ -306,24 +325,28 @@ def main_process(gpu, weights_path, dataset, data, batch_size=8, sequence=None, 
         stats["anc_idxs"].extend(frames[:batch_size//2])
         stats["pos_idxs"].extend(frames[batch_size//2:])
 
-        rel_poses = np.linalg.inv(batch_poses[:batch_size//2]) @ batch_poses[batch_size//2:]
-        rel_poses = torch.from_numpy(rel_poses).float().to(device)
+        gt_tf_p2a = np.linalg.inv(batch_poses[:batch_size//2]) @ batch_poses[batch_size//2:]
+        gt_tf_p2a = torch.from_numpy(gt_tf_p2a).float().to(device)
 
         for yaw_deg in yaw_deg_values:
 
-            delta_tra = torch.tensor([0., 0., 0.]).cuda()
-            delta_rot = torch.tensor([0., 0., np.deg2rad(yaw_deg)]).cuda()
-            delta_pose = get_rt_matrix(delta_tra, delta_rot, "xyz").float().to(device)
+            aug_tra_yaw = torch.tensor([0., 0., 0.]).cuda()
+            aug_rot_yaw = torch.tensor([0., 0., np.deg2rad(-yaw_deg)]).cuda()
+            aug_tf_yaw = get_rt_matrix(transl=aug_tra_yaw, rot=aug_rot_yaw, rot_parmas="xyz").float().to(device)
 
-            gt_poses = delta_pose.repeat(batch_size // 2, 1, 1)
+            new_gt_tf_p2a = torch.linalg.inv(aug_tf_yaw)
+            new_gt_tf_p2a = new_gt_tf_p2a.repeat(batch_size // 2, 1, 1)
+            new_gt_tf_p2a[:, :3, 3] = gt_tf_p2a[:, :3, 3]
 
-            yaw_rel_poses = delta_pose @ rel_poses
+            gt_rot_p2a = gt_tf_p2a.clone()
+            gt_rot_p2a[:, :3, 3] = 0
+            aug_tf = aug_tf_yaw @ gt_rot_p2a
 
             rotated_sample = {
                 "anchor": [s.to(device) for s in sample["anchor"][:batch_size//2]]
             }
             # Transform each Positive Point Cloud
-            for tf, pc in zip(yaw_rel_poses, sample["anchor"][batch_size//2:]):
+            for tf, pc in zip(aug_tf, sample["anchor"][batch_size//2:]):
                 homogeneous_pc = pc.clone().to(device)
                 homogeneous_pc[:, 3] = 1.
                 homogeneous_pc = tf @ homogeneous_pc.T
@@ -331,7 +354,8 @@ def main_process(gpu, weights_path, dataset, data, batch_size=8, sequence=None, 
                 homogeneous_pc[:, 3] = pc[:, 3]
                 rotated_sample["anchor"].append(homogeneous_pc)
 
-            batch_angle_stats = eval_batch(model, exp_cfg, rotated_sample, gt_poses, device)
+            batch_angle_stats = eval_batch(model, exp_cfg, rotated_sample, new_gt_tf_p2a, device,
+                                           do_ransac=do_ransac, do_icp=do_icp)
 
             for k, v in batch_angle_stats.items():
                 stats[k][yaw_deg].extend(v)
@@ -360,15 +384,17 @@ def main_process(gpu, weights_path, dataset, data, batch_size=8, sequence=None, 
 def cli_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--data', default='/home/cattaneo/Datasets/KITTI',
-                        help='dataset directory')
-    parser.add_argument('--weights_path', default='/home/cattaneo/checkpoints/deep_lcd')
-    parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--dataset', type=str, default='kitti')
-    parser.add_argument('--sequence', type=str, default=None)
+    parser.add_argument("--data", default="/home/cattaneo/Datasets/KITTI",
+                        help="dataset directory")
+    parser.add_argument("--weights_path", default="/home/cattaneo/checkpoints/deep_lcd")
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--dataset", type=str, default="kitti")
+    parser.add_argument("--sequence", type=str, default=None)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument('--loop_file', type=str, default=None)
-    parser.add_argument('--save_path', default="")
+    parser.add_argument("--loop_file", type=str, default=None)
+    parser.add_argument("--do_ransac", action="store_true")
+    parser.add_argument("--do_icp", action="store_true")
+    parser.add_argument("--save_path", default="")
 
     args = parser.parse_args()
 

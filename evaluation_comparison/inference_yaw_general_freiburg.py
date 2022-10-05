@@ -12,6 +12,7 @@ from pcdet.datasets.kitti.kitti_dataset import KittiDataset
 from tqdm import tqdm
 
 from datasets.Freiburg import FreiburgRegistrationDataset
+from evaluation_comparison.inference_yaw_general import get_ransac_features
 from models.get_models import load_model
 from models.backbone3D.RandLANet.RandLANet import prepare_randlanet_input
 from models.backbone3D.RandLANet.helper_tool import ConfigSemanticKITTI2
@@ -213,7 +214,7 @@ def main_process(gpu, weights_path, args):
                         pred_transl.append(transformation[i][:3, 3].detach().cpu())
                 elif args.ransac:
                     coords = batch_dict['point_coords'].view(batch_dict['batch_size'], -1, 4)
-                    feats = batch_dict['point_features'].squeeze(-1)
+                    feats = get_ransac_features(batch_dict, model=model)
                     for i in range(batch_dict['batch_size'] // 2):
                         coords1 = coords[i]
                         coords2 = coords[i + batch_dict['batch_size'] // 2]

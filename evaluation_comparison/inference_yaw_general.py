@@ -1,5 +1,6 @@
 import argparse
 import os
+from pathlib import Path
 import pickle
 
 import faiss
@@ -15,6 +16,7 @@ from scipy.stats import circmean, circstd
 from torch.utils.data.sampler import Sampler, BatchSampler
 from tqdm import tqdm
 
+from evaluation_comparison.metrics.registration import get_ransac_features
 from datasets.KITTI360Dataset import KITTI3603DPoses
 from datasets.KITTI_data_loader import KITTILoader3DPoses
 from models.get_models import load_model
@@ -378,7 +380,9 @@ def main_process(gpu, weights_path, dataset, data, batch_size=8, sequence=None, 
                         pred_transl.append(transformation[i][:3, 3].detach().cpu())
                 elif ransac:
                     coords = batch_dict['point_coords'].view(batch_dict['batch_size'], -1, 4)
-                    feats = batch_dict['point_features'].squeeze(-1)
+
+                    feats = get_ransac_features(batch_dict, model=model)
+
                     for i in range(batch_dict['batch_size'] // 2):
                         coords1 = coords[i]
                         coords2 = coords[i + batch_dict['batch_size'] // 2]
