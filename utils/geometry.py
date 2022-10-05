@@ -121,10 +121,12 @@ def get_rt_matrix(transl, rot, rot_parmas='xyz'):
     else:
         raise TypeError("Unknown rotation params order")
 
-    RT1 = torch.cat((torch.eye(3).float().cuda(), transl.unsqueeze(0).T), 1)
-    RT1 = torch.cat((RT1, torch.tensor([[0., 0., 0., 1.]]).cuda()), 0)
-    RT2 = torch.cat((R_sample, torch.zeros((3, 1)).float().cuda()), 1)
-    RT2 = torch.cat((RT2, torch.tensor([[0., 0., 0., 1.]]).cuda()), 0)
+    device = transl.device
+
+    RT1 = torch.cat((torch.eye(3).float().to(device), transl.unsqueeze(0).T), 1)
+    RT1 = torch.cat((RT1, torch.tensor([[0., 0., 0., 1.]]).to(device)), 0)
+    RT2 = torch.cat((R_sample.to(device), torch.zeros((3, 1)).float().to(device)), 1)
+    RT2 = torch.cat((RT2, torch.tensor([[0., 0., 0., 1.]]).to(device)), 0)
 
     RT_sample = RT1.float() @ RT2.float()
 
