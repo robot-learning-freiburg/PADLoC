@@ -52,8 +52,8 @@ def plot_path(poses, tp, fp, fn, style, save_path=None, save_stats=True, do_plot
 	fn_indexes = np.nonzero(fn)[0] + 100
 	tp_indexes = np.nonzero(tp)[0] + 100
 
-	# h2 = ax.scatter(poses[fp_indexes, 0, 3], poses[fp_indexes, 1, 3], zorder=4, **style.fp)
-	# h3 = ax.scatter(poses[fn_indexes, 0, 3], poses[fn_indexes, 1, 3], zorder=3, **style.fn)
+	h2 = ax.scatter(poses[fp_indexes, 0, 3], poses[fp_indexes, 1, 3], zorder=4, **style.fp)
+	h3 = ax.scatter(poses[fn_indexes, 0, 3], poses[fn_indexes, 1, 3], zorder=3, **style.fn)
 	h4 = ax.scatter(poses[tp_indexes, 0, 3], poses[tp_indexes, 1, 3], zorder=2, **style.tp)
 
 	if save_stats:
@@ -120,7 +120,8 @@ def parse_args():
 	return vars(args)
 
 
-def main(pairs_file, dataset, dataset_path, sequence, styles, save_path=None, save_stats=True, do_plot_legends=False):
+def main(pairs_file, dataset, dataset_path, sequence, styles, save_path=None, save_stats=True, do_plot_legends=False,
+		 is_distance=True):
 	# sequence = "00"
 	# dataset_path = '/media/RAIDONE/DATASETS/KITTI/ODOMETRY'
 	device = torch.device("cuda:0")
@@ -140,10 +141,10 @@ def main(pairs_file, dataset, dataset_path, sequence, styles, save_path=None, sa
 	else:
 		raise NotImplementedError(f"Invalid dataset {dataset}")
 
-	map_tree_poses = KDTree(np.stack(dataset_for_recall.poses)[:, :3, 3])
 	poses = np.stack(dataset_for_recall.poses)
+	map_tree_poses = KDTree(poses[:, :3, 3])
 
-	tp, fp, fn = compute_PR(pd_ours, poses, map_tree_poses)
+	tp, fp, fn = compute_PR(pd_ours, poses, map_tree_poses, is_distance=is_distance)
 
 	for style in styles:
 		plot_path(poses, tp, fp, fn, style, img_style_filename(style, save_path),

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from evaluation_comparison.plot_styles import Style
-from evaluation_comparison.plot_matches import main as plot_matches
+from evaluation_comparison.plot.plot_matches import main as plot_matches
 
 
 def main():

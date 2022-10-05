@@ -131,7 +131,7 @@ def main():
 				df = df[curve_cfg.plot_runs]
 
 			if curve_cfg.smooth_f:
-				df = df.ewm(alpha=1 - curve_cfg.smooth_f).mean()
+				df = df.ewm(alpha=1 - curve_cfg.smooth_f).mean().to_numpy()
 
 			# Plot data from WandB
 			for style in styles:

@@ -110,11 +110,11 @@ def main(stat_file_path: Path,
     stats_files = [
         # DL Models
         StatFile("PADLoC", stat_file_path / "padloc_220527191054" / "lastiter" / "kitt" / "reg" /
-                 "eval_reg_padloc_220527191054_lastiter_kitt_seq_08.pickle"),
+                 "eval_reg_padloc_220527191054_lastiter_kitt_seq_08_only_rot.pickle"),
         StatFile("LCDNet", stat_file_path / "lcdnet_210916000234" / "lastiter" / "kitt" / "reg" /
-                 "eval_reg_lcdnet_210916000234_lastiter_kitt_seq_08.pickle"),
+                 "eval_reg_lcdnet_210916000234_lastiter_kitt_seq_08_only_rot.pickle"),
         StatFile("DCP",    stat_file_path / "dcp_220404183414" / "lastiter" / "kitt" / "reg" /
-                 "eval_reg_dcp_220404183414_lastiter_kitt_seq_08.pickle"),
+                 "eval_reg_dcp_220404183414_lastiter_kitt_seq_08_only_rot.pickle"),
 
         # Baselines
         StatFile("SC", stat_file_path / "baselines" / "sc" / "kitt" / "reg" /
@@ -146,7 +146,7 @@ def cli_args() -> dict:
     parser.add_argument("--stat_file_path", type=Path,
                         default=Path("/mnt/swork/res/yaw_sensitivity/"))
     parser.add_argument("--save_path", type=Path,
-                        default=Path("/home/arceyd/Documents/Projects/PADLoC/img/yaw_sensitivity/"))
+                        default=Path("/home/arceyd/Documents/Projects/PADLoC/img/yaw_sensitivity_only_rot/"))
     parser.add_argument("--bounds", choices=["std", "quartile", "min_max", "none"], default="std")
     parser.add_argument("--extension", default="pdf")
 

@@ -6,9 +6,8 @@ from matplotlib.collections import LineCollection
 import numpy as np
 import torch
 import torch.nn
-import torch.nn.functional as f
 
-from evaluation_comparison.plot_pan_pc import plot_pc_on_ax, iso_transform, transform_vertices
+from evaluation_comparison.plot.plot_pan_pc import plot_pc_on_ax, iso_transform, transform_vertices
 from pcdet.datasets.kitti.kitti_dataset import KittiDataset
 from datasets.KITTI_data_loader import KITTILoader3DDictSingle
 from models.get_models import get_model
@@ -144,7 +143,10 @@ def compute_samples_transforms(samples):
 def samples_np_to_torch(samples, device):
     for k, v in samples.items():
         if isinstance(v, np.ndarray):
-            samples[k] = torch.from_numpy(v).float().to(device)
+            samples[k] = torch.from_numpy(v).float()
+
+        if isinstance(samples[k], torch.Tensor):
+            samples[k] = samples[k].to(device)
 
 
 def collate_samples(samples, model, device):

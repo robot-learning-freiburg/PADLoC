@@ -33,32 +33,35 @@ def transform_vertices(*, vertices, transform_matrix, device):
     return tf_vertices
 
 
-def plot_pc_on_ax(ax, pc, xlim=None, ylim=None, semantic_labels=None, **kwargs):
-    ax.axis('off')
-    ax.set_aspect('equal')
-    ax.patch.set_facecolor("white")
-    # ax.patch.set_edgecolor("none")
+def plot_pc_on_ax(ax, pc, xlim=None, ylim=None, semantic_labels=None, s=0.3, **kwargs):
 
     scatter_style = {}
     if semantic_labels is not None:
-        scatter_style = dict(c=KITTI_COLORS[semantic_labels], s=0.3, marker="o", lw=0)
+        scatter_style = dict(c=KITTI_COLORS[semantic_labels], s=s, marker="o", lw=0)
 
     ax.scatter(pc[:, 0], pc[:, 1], **scatter_style, **kwargs)
     if xlim is not None:
         ax.set_xlim(*xlim)
     if ylim is not None:
         ax.set_ylim(*ylim)
-    ax.patch.set_facecolor("white")
-    ax.patch.set_edgecolor("none")
 
     return ax
 
 
-def plot_pc(pc, xlim, ylim, fig_size=(11.6, 8.2), dpi=400, semantic_labels=None, save_path=None):
-    fig = plt.figure(dpi=dpi, figsize=fig_size, frameon=True, edgecolor="none", facecolor="white")
+def plot_pc(pc, xlim, ylim, fig_size=(11.6, 8.2), dpi=400, semantic_labels=None, save_path=None,
+            frame_on=True, edge_color="none", facecolor="white"):
+    fig = plt.figure(dpi=dpi, figsize=fig_size, frameon=frame_on, edgecolor=edge_color, facecolor=facecolor)
     ax = fig.add_subplot(facecolor="white")
 
+    ax.axis('off')
+    ax.set_aspect('equal')
+    ax.patch.set_facecolor("white")
+    # ax.patch.set_edgecolor("none")
+
     ax = plot_pc_on_ax(ax, pc, xlim, ylim, semantic_labels=semantic_labels)
+
+    ax.patch.set_facecolor("white")
+    ax.patch.set_edgecolor("none")
 
     if save_path:
         print(f"Saving figure to {save_path}")

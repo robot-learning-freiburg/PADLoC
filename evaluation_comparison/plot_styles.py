@@ -87,7 +87,7 @@ class Monochrome:
 				confidence_weights = (confidence_weights - min_w) / (max_w - min_w)
 
 		# Convert to numpy
-		confidence_weights = confidence_weights.cpu().numpy()
+		confidence_weights = confidence_weights.detach().cpu().numpy()
 
 		return confidence_weights
 

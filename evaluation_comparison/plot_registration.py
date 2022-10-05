@@ -6,8 +6,8 @@ import numpy as np
 import torch
 
 from evaluation_comparison.plot_styles import Style
-from evaluation_comparison.plot_matches import (transform_vertices, iso_transform, get_samples,
-												load_model, load_dataset, parse_args)
+from evaluation_comparison.plot.plot_matches import (transform_vertices, iso_transform, get_samples,
+                                                     load_model, load_dataset, parse_args)
 from evaluation_comparison.inference_yaw_general import rot2aa
 
 

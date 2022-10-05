@@ -4,6 +4,7 @@ from typing import List, NoReturn, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from sklearn.neighbors import KDTree
 
 from datasets.KITTI_data_loader import KITTILoader3DPoses
@@ -20,7 +21,13 @@ PRPlot = namedtuple("PRPlot", ["title", "pr_func"])
 PRCurve = namedtuple("PRCurve", ["label", "precision", "recall", "marker"])
 
 
-def plot_pr_curve(ax, precision, recall, label, marker, mark_every: float = 0.03):
+def plot_pr_curve(ax, precision, recall, label, marker, mark_every: float = 0.03, smooth_alpha=0.5):
+
+    if smooth_alpha:
+        precision_df = pd.DataFrame({"pre": precision})
+        precision = precision_df.ewm(alpha=smooth_alpha).mean()
+        precision = precision["pre"].to_numpy()
+
     ax.plot(recall, precision, label=label, marker=marker, markevery=mark_every)
 
 
@@ -75,13 +82,12 @@ def compute_and_plot_pr(*, pair_files: List[Dataset],
                         extension: str = "pdf"
                         ) -> NoReturn:
 
-    precision_recall_curves = {p.title: [] for p in pr_plots}
-
     for dataset in pair_files:
         poses = load_poses(dataset)
 
         seq_str = f", s{dataset.sequence}" if dataset.sequence is not None else ""
         dataset_str = f" ({dataset.label}{seq_str})"
+        precision_recall_curves = {p.title: [] for p in pr_plots}
 
         for pair_file in dataset.pair_files:
             pair_dist = np.load(pair_file.path)["arr_0"]
@@ -159,9 +165,9 @@ def main():
                     PairFile(label="LCDNet", path=pair_path / "lcdnet_210916000234" / "lastiter" / "kitt" / "lcd" /
                              "eval_lcd_lcdnet_210916000234_lastiter_kitt_seq_08.npz",
                              is_dist=True, ignore_last=False, marker="x"),
-                    PairFile(label="DCP", path=pair_path / "dcp_220404183414" / "lastiter" / "kitt" / "lcd" /
-                             "eval_lcd_dcp_220404183414_lastiter_kitt_seq_08.npz",
-                             is_dist=True, ignore_last=False, marker="x"),
+                    # PairFile(label="DCP", path=pair_path / "dcp_220404183414" / "lastiter" / "kitt" / "lcd" /
+                    #          "eval_lcd_dcp_220404183414_lastiter_kitt_seq_08.npz",
+                    #          is_dist=True, ignore_last=False, marker="x"),
                     PairFile(label="PADLoC", path=pair_path / "padloc_220527191054" / "lastiter" / "kitt" / "lcd" /
                              "eval_lcd_padloc_220527191054_lastiter_kitt_seq_08.npz",
                              is_dist=True, ignore_last=False, marker="x"),
