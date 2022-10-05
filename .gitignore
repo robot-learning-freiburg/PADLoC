@@ -1,5 +1,6 @@
 *.avi
 .idea/
+.vscode/
 *.pcd
 *.png
 __pycache__/
@@ -8,4 +9,4 @@ __pycache__/
 pcd/
 csv/
 wandb/
-.vscode/settings.json
+tmp_slurm_jobs/
