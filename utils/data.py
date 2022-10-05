@@ -1,5 +1,6 @@
 import time
 
+import json
 import torch
 from torch.utils.data.dataloader import default_collate
 
@@ -252,6 +253,8 @@ class Timer(object):
         self.total_time = 0.
         self.calls = 0
         self.start_time = 0.
+        self.times = []
+        self.call_incs = []
         self.diff = 0.
         self.binary_fn = binary_fn
         self.tmp = init_val
@@ -261,6 +264,8 @@ class Timer(object):
         self.calls = 0
         self.start_time = 0
         self.diff = 0
+        self.times = []
+        self.call_incs = []
 
     @property
     def avg(self):
@@ -274,10 +279,13 @@ class Timer(object):
         # does not normalize for multithreading
         self.start_time = time.time()
 
-    def toc(self, average=True):
-        self.diff = time.time() - self.start_time
-        self.total_time += self.diff
-        self.calls += 1
+    def toc(self, average=True, call_inc=1):
+        diff = time.time() - self.start_time
+        self.diff = diff
+        self.times.append(diff)
+        self.call_incs.append(call_inc)
+        self.total_time += diff
+        self.calls += call_inc
         if self.binary_fn:
             self.tmp = self.binary_fn(self.tmp, self.diff)
         if average:
@@ -285,3 +293,13 @@ class Timer(object):
         else:
             return self.diff
 
+    def save_json(self, path):
+        stats = {
+            "count": int(self.calls),
+            "sum": float(self.total_time),
+            "mean": float(self.avg),
+            "laps": [float(t) for t in self.times],
+            "call_increments": [int(c) for c in self.call_incs]
+        }
+        with open(path, "w") as fh:
+            json.dump(stats, fh, indent=4)

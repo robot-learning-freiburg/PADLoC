@@ -1,8 +1,8 @@
 import argparse
 from datasets.NCLTDataset import NCLTDataset
 import os
+from pathlib import Path
 import pickle
-import time
 
 import faiss
 import numpy as np
@@ -22,7 +22,7 @@ from evaluation_comparison.plot_PR_curve import compute_PR, compute_AP, compute_
 from models.get_models import load_model
 from models.backbone3D.RandLANet.RandLANet import prepare_randlanet_input
 from models.backbone3D.RandLANet.helper_tool import ConfigSemanticKITTI2
-from utils.data import merge_inputs
+from utils.data import merge_inputs, Timer
 from utils.tools import set_seed
 from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointnet2_utils import furthest_point_sample
 
@@ -163,7 +163,7 @@ class BatchSamplePairs(BatchSampler):
 
 
 def main_process(gpu, weights_path, dataset, data, seed=0, batch_size=6, num_iters=1, sequence=None,
-                 save_path=None, stats_save_path=None, loop_file=None, z_offset=0.283):
+                 save_path=None, stats_save_path=None, loop_file=None, z_offset=0.283, save_times_path=None):
     global EPOCH
     rank = gpu
 
@@ -293,6 +293,7 @@ def main_process(gpu, weights_path, dataset, data, seed=0, batch_size=6, num_ite
     local_iter = 0.
     transl_error_sum = 0
     yaw_error_sum = 0
+    time_net = Timer()
     emb_list_map = []
     rot_errors = []
     transl_errors = []
@@ -304,7 +305,8 @@ def main_process(gpu, weights_path, dataset, data, seed=0, batch_size=6, num_ite
     for batch_idx, sample in enumerate(tqdm(MapLoader)):
 
         model.eval()
-        time1 = time.time()
+        torch.cuda.synchronize()
+        time_net.tic()
         with torch.no_grad():
 
             anchor_list = []
@@ -347,8 +349,8 @@ def main_process(gpu, weights_path, dataset, data, seed=0, batch_size=6, num_ite
             #     emb = emb / emb.norm(dim=1, keepdim=True)
             emb_list_map.append(emb)
 
-        time2 = time.time()
-        time_descriptors.append(time2-time1)
+        torch.cuda.synchronize()
+        time_net.toc(call_inc=batch_dict['batch_size'] // 2)
 
     emb_list_map = torch.cat(emb_list_map).cpu().numpy()
     # map_tree = KDTree(emb_list_map)
@@ -385,6 +387,11 @@ def main_process(gpu, weights_path, dataset, data, seed=0, batch_size=6, num_ite
         print(f"Saving Stats file to {stats_save_path}.")
         with open(stats_save_path, "wb") as f:
             pickle.dump(save_dict, f)
+
+    if save_times_path:
+        save_times_path = Path(save_times_path)
+        save_times_path.mkdir(parents=True, exist_ok=True)
+        time_net.save_json(save_times_path / "times_model_inference.json")
 
     # # FAISS
     # real_loop = []
@@ -579,6 +586,7 @@ if __name__ == '__main__':
     parser.add_argument("--batch_size", type=int, default=6)
     parser.add_argument('--save_path', type=str, default=None)
     parser.add_argument('--stats_save_path', type=str, default=None)
+    parser.add_argument('--save_times_path', type=str, default=None)
     parser.add_argument("--z_offset", type=float, default=0.283)
 
     args = parser.parse_args()

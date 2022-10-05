@@ -1,7 +1,6 @@
 import argparse
 import os
 import pickle
-import time
 
 import faiss
 import numpy as np
@@ -149,7 +148,7 @@ def rot2aa(rotation):
 
 def main_process(gpu, weights_path, dataset, data, batch_size=8, sequence=None, loop_file=None,
                  num_iters=1, seed=0, ransac=False, icp=False,
-                 save_path=None):
+                 save_path=None, save_times_path=None):
     global EPOCH
     rank = gpu
 
@@ -297,7 +296,7 @@ def main_process(gpu, weights_path, dataset, data, batch_size=8, sequence=None, 
         transl_errors = []
         rot_errors = []
         for batch_idx, sample in enumerate(tqdm(RecallLoader)):
-            if batch_idx==1:
+            if batch_idx == 1:
                 time_net.reset()
                 time_ransac.reset()
                 time_icp.reset()
@@ -307,15 +306,15 @@ def main_process(gpu, weights_path, dataset, data, batch_size=8, sequence=None, 
             #     print("Time RANSAC: ", time_ransac.avg)
             #     print("Time ICP: ", time_icp.avg)
 
-            start_time = time.time()
-
-            ### AAA
             model.eval()
             with torch.no_grad():
 
                 anchor_list = []
                 for i in range(len(sample['anchor'])):
                     anchor = sample['anchor'][i].to(device)
+
+                    torch.cuda.synchronize()
+                    time_net.tic()
 
                     if exp_cfg['3D_net'] != 'PVRCNN':
                         anchor_set = furthest_point_sample(anchor[:, 0:3].unsqueeze(0).contiguous(), exp_cfg['num_points'])
@@ -344,11 +343,10 @@ def main_process(gpu, weights_path, dataset, data, batch_size=8, sequence=None, 
                             continue
                         model_in[key] = torch.from_numpy(val).float().to(device)
 
-                torch.cuda.synchronize()
-                time_net.tic()
+
                 batch_dict = model(model_in, metric_head=True)
                 torch.cuda.synchronize()
-                time_net.toc()
+                time_net.toc(call_inc=batch_dict['batch_size'] // 2)
                 pred_transf = []
                 pred_transl = []
                 yaw = batch_dict['out_rotation']
@@ -551,6 +549,13 @@ def main_process(gpu, weights_path, dataset, data, batch_size=8, sequence=None, 
         with open(f'{save_path}', 'wb') as f:
             pickle.dump(save_dict, f)
 
+    if save_times_path:
+        save_times_path = Path(save_times_path)
+        save_times_path.mkdir(parents=True, exist_ok=True)
+        time_net.save_json(save_times_path / "times_model_inference.json")
+        time_icp.save_json(save_times_path / "times_reg_icp.json")
+        time_ransac.save_json(save_times_path / "times_reg_ransac.json")
+
     return save_dict
 
 
@@ -568,6 +573,7 @@ if __name__ == '__main__':
     parser.add_argument('--icp', action='store_true', default=False)
     parser.add_argument('--loop_file', type=str, default=None)
     parser.add_argument('--save_path', default="")
+    parser.add_argument('--save_times_path', default="")
     args = vars(parser.parse_args())
 
     # if args.device is not None and not args.no_cuda:
