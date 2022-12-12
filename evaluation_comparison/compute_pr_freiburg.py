@@ -5,7 +5,7 @@ import pickle
 from sklearn.neighbors import KDTree
 
 from datasets.Freiburg import FreiburgDataset
-from evaluation_comparison.metrics.detection import generate_pairs, compute_pr_fp, compute_pr_fn
+from evaluation_comparison.metrics.detection import generate_pairs, compute_pr_fp, compute_pr_fn, load_pairs_file
 
 
 # def compute_pr(pair_dist, poses, map_tree_poses, is_distance=True, ignore_last=False,
@@ -85,10 +85,6 @@ def compute_ap(precision, recall):
     return ap
 
 
-def load_pairs(pair_distances_path):
-    return np.load(pair_distances_path)["arr_0"]
-
-
 def load_poses(dataset_path, without_ground=False):
     dataset = FreiburgDataset(dataset_path, without_ground=without_ground)
     poses = np.stack(dataset.poses)
@@ -98,7 +94,7 @@ def load_poses(dataset_path, without_ground=False):
 def main(pair_distances_path, dataset_path, stats_save_path=None, without_ground=False,
          positive_distance=10., negative_frames=200):
 
-    pair_distances = load_pairs(pair_distances_path)
+    pair_distances = load_pairs_file(pair_distances_path)
 
     poses = load_poses(dataset_path, without_ground)
     poses_tree = KDTree(poses[:, :3, 3])

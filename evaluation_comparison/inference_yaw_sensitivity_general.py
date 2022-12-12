@@ -159,13 +159,13 @@ def eval_batch(model, exp_cfg, sample, batch_gt_tf_p2a, device, do_ransac=False,
         if do_ransac:
             feats = get_ransac_features(batch_dict, model=model)
 
-            pred_tf_a2p = batch_ransac_registration(batch_coords=coords, batch_feats=feats,
-                                                    batch_size=batch_dict["batch_size"]).to(device=device,
-                                                                                            dtype=torch.float32)
+            pred_tf_a2p, _ = batch_ransac_registration(batch_coords=coords, batch_feats=feats,
+                                                       batch_size=batch_dict["batch_size"])
+            pred_tf_a2p = pred_tf_a2p.to(device=device, dtype=torch.float32)
 
         if do_icp:
-            pred_tf_a2p = batch_icp_registration(batch_coords=coords, batch_size=batch_dict["batch_size"],
-                                                 initial_transformations=pred_tf_a2p)
+            pred_tf_a2p, _ = batch_icp_registration(batch_coords=coords, batch_size=batch_dict["batch_size"],
+                                                    initial_transformations=pred_tf_a2p)
 
         pred_tra, pred_yaw = get_tra_rot(pred_tf_a2p)
 

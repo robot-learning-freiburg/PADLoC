@@ -35,11 +35,13 @@ def transform_vertices(*, vertices, transform_matrix, device):
 
 def plot_pc_on_ax(ax, pc, xlim=None, ylim=None, semantic_labels=None, s=0.3, **kwargs):
 
-    scatter_style = {}
+    scatter_style = dict(s=s, marker="o", lw=0)
     if semantic_labels is not None:
         scatter_style = dict(c=KITTI_COLORS[semantic_labels], s=s, marker="o", lw=0)
 
-    ax.scatter(pc[:, 0], pc[:, 1], **scatter_style, **kwargs)
+    scatter_style.update(kwargs)
+
+    ax.scatter(pc[:, 0], pc[:, 1], **scatter_style)
     if xlim is not None:
         ax.set_xlim(*xlim)
     if ylim is not None:

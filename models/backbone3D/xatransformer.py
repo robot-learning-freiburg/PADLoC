@@ -256,7 +256,7 @@ class XATransformerEncoderLayer(nn.Module):
 		Shape:
 			see the docs in Transformer class.
 		"""
-		src2, attn = self.self_attn(query=q, key=k, value=v, attn_mask=src_mask,
+		src2, attn = self.self_attn(q, k, v, attn_mask=src_mask,
 									key_padding_mask=src_key_padding_mask)
 
 		src = self.dropout1(src2)

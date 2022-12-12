@@ -282,13 +282,13 @@ def main_process(gpu, weights_path, args):
                     coords = batch_dict['point_coords'].view(batch_dict['batch_size'], -1, 4)
 
                     feats = get_ransac_features(batch_dict, model=model)
-                    transformation = batch_ransac_registration(batch_coords=coords, batch_feats=feats,
-                                                               batch_size=batch_dict["batch_size"])
+                    transformation, _ = batch_ransac_registration(batch_coords=coords, batch_feats=feats,
+                                                                  batch_size=batch_dict["batch_size"])
 
                 if args.icp:
                     coords = batch_dict['point_coords'].view(batch_dict['batch_size'], -1, 4)
-                    transformation = batch_icp_registration(batch_coords=coords, batch_size=batch_dict["batch_size"],
-                                                            initial_transformations=transformation)
+                    transformation, _ = batch_icp_registration(batch_coords=coords, batch_size=batch_dict["batch_size"],
+                                                               initial_transformations=transformation)
 
                 for i in range(transformation.shape[0]):
                     yaw_preds[test_pair_idxs[current_frame, 0], test_pair_idxs[current_frame, 1]] = mat2xyzrpy(transformation[i])[-1].item()

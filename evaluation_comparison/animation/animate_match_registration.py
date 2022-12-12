@@ -8,10 +8,14 @@ from scipy.spatial.transform import Slerp, Rotation
 import torch.cuda
 
 from datasets.KITTI_data_loader import KITTILoader3DDictPairs
+from evaluation_comparison.metrics.registration import get_ransac_features, batch_ransac_registration
 from evaluation_comparison.plot.plot_matches import collate_samples
 from evaluation_comparison.plot.plot_pan_pc import transform_vertices, plot_pc_on_ax
 from evaluation_comparison.plot_styles import Color
 from models.get_models import load_model
+
+import open3d as o3d
+import pickle
 
 
 class TransformLerp:
@@ -46,7 +50,8 @@ class TransformLerp:
         return transformation
 
 
-def main(kitti_path, seq, frame, weights_path, save_path: Path, loop_file="loop_GT_4m", gpu=0):
+def main(kitti_path, seq, frame, weights_path, save_path: Path, loop_file="loop_GT_4m", gpu=0, do_ransac=False,
+         use_gt_tf=False):
 
     dataset = KITTILoader3DDictPairs(dir=kitti_path, sequence=seq, poses=kitti_path / "sequences" / seq / "poses.txt",
                                      loop_file=loop_file, npoints=None, device=None,
@@ -73,25 +78,67 @@ def main(kitti_path, seq, frame, weights_path, save_path: Path, loop_file="loop_
     pred_pos_pc = batch_dict["sinkhorn_matches"][0][:, :3]
 
     anc_samp_ids = batch_dict["keypoint_idxs"][0]
-    # pos_samp_ids = batch_dict["keypoint_idxs"][1]
-
-    p2a_transf = torch.eye(4, device=device)
-    p2a_transf[:3, :] = batch_dict["transformation"][0]  # Prediction
-
-    geometric_accuracy = anc_pc[anc_samp_ids] - transform_vertices(vertices=pred_pos_pc, transform_matrix=p2a_transf,
-                                                                   device=device)
-    geometric_accuracy = geometric_accuracy.square().sum(dim=1).sqrt().detach().cpu().numpy()
-    good_matches = geometric_accuracy < 6.
+    pos_samp_ids = batch_dict["keypoint_idxs"][1]
 
     anc_semantic = batch_dict["anchor_semantic"][0].detach().cpu().numpy().flatten().astype(int)
     pos_semantic = batch_dict["positive_semantic"][0].detach().cpu().numpy().flatten().astype(int)
 
-    gt_p2a_transf = batch_dict["p2a_transform"][0]
+    if do_ransac:
 
-    p2a_transf = gt_p2a_transf  # Set to GT
+        coords = batch_dict["point_coords"].view(batch_dict["batch_size"], -1, 4)
+        feats = get_ransac_features(batch_dict, model=model)
+        p2a_transf, results = batch_ransac_registration(batch_coords=coords, batch_feats=feats,
+                                                        batch_size=batch_dict["batch_size"])
 
-    # matches = batch_dict["transport"]
-    match_weights = batch_dict["conf_weights"][0]
+        p2a_transf = p2a_transf[0]
+        correspondence_set = np.asarray(results[0].correspondence_set)
+
+        anc_samp_ids = anc_samp_ids[correspondence_set[:, 1]]
+        pos_samp_ids = pos_samp_ids[correspondence_set[:, 0]]
+
+        print("Fun!")
+        save_pcd1 = o3d.geometry.PointCloud()
+        save_pcd2 = o3d.geometry.PointCloud()
+        save_pcd1.points = o3d.utility.Vector3dVector(batch_dict['anchor'][0][:, :3].cpu().numpy())
+        save_pcd2.points = o3d.utility.Vector3dVector(
+            batch_dict['positive'][0][:, :3].cpu().numpy())
+        o3d.io.write_point_cloud(f'./{batch_dict["anchor_idx"][0]:06d}_source.pcd', save_pcd1)
+        o3d.io.write_point_cloud(f'./{batch_dict["positive_idx"][0]:06d}_target.pcd', save_pcd2)
+        pose1 = dataset.poses[batch_dict["anchor_idx"][0]]
+        pose2 = dataset.poses[batch_dict["positive_idx"][0]]
+        delta_pose = np.linalg.inv(pose1) @ pose2
+        np.savez(f'./tf_gt', delta_pose)
+        np.savez(f'./tf_pred', p2a_transf)
+        line_dict = {}
+        # line_dict['points'] = np.concatenate([coords[i].cpu(), coords[i + batch_dict['batch_size'] // 2].cpu()])[:, 1:]
+        line_dict['points'] = np.concatenate([coords[1].cpu(), coords[0].cpu()])[:, 1:]
+        line_dict['lines'] = np.asarray(correspondence_set)
+        line_dict['lines'][:, 1] += coords[0].shape[0]
+        with open(f'./lines.pickle', 'wb') as f:
+            pickle.dump(line_dict, f)
+
+        match_weights = torch.ones(correspondence_set.shape[0], dtype=float)
+        good_matches = np.ones_like(match_weights, dtype=bool)
+        good_matches_mask = np.ones_like(match_weights, dtype=bool)
+
+    else:
+        p2a_transf = torch.eye(4, device=device)
+        p2a_transf[:3, :] = batch_dict["transformation"][0]  # Prediction
+
+        geometric_accuracy = anc_pc[anc_samp_ids] -\
+            transform_vertices(vertices=pred_pos_pc, transform_matrix=p2a_transf, device=device)
+
+        geometric_accuracy = geometric_accuracy.square().sum(dim=1).sqrt().detach().cpu().numpy()
+        good_matches = geometric_accuracy < 6.
+
+        # matches = batch_dict["transport"]
+        match_weights = batch_dict["conf_weights"][0]
+        match_weights = match_weights[good_matches]
+
+        good_matches_mask = np.ones(good_matches.sum(), dtype=bool)
+
+    if use_gt_tf:
+        p2a_transf = batch_dict["p2a_transform"][0]  # Set to GT
 
     clip_duration = 6.
     fps = 30
@@ -159,14 +206,18 @@ def main(kitti_path, seq, frame, weights_path, save_path: Path, loop_file="loop_
                       s=0.1, c="#00FF00", marker="o", lw=0,
                       )
 
-        match_segments = np.concatenate([anc_frame[anc_samp_ids][:, :2].reshape(-1, 1, 2).detach().cpu().numpy(),
-                                         pred_pos_frame[:, :2].reshape(-1, 1, 2).detach().cpu().numpy()], axis=1)
+        samp_pos_frame = pos_frame[pos_samp_ids] if do_ransac else pred_pos_frame
 
-        match_style = style.match_lines_styles(match_weights[good_matches],
-                                               geometric_accuracy=np.ones(good_matches.sum(), dtype=bool)
+        match_segments = np.concatenate([anc_frame[anc_samp_ids][:, :2].reshape(-1, 1, 2).detach().cpu().numpy(),
+                                         samp_pos_frame[:, :2].reshape(-1, 1, 2).detach().cpu().numpy()], axis=1)
+
+        match_style = style.match_lines_styles(match_weights,
+                                               geometric_accuracy=good_matches_mask
                                                )
-        match_style["colors"][:, :3] *= 0
-        match_style["linewidths"] *= 3
+        match_style["colors"][:, :2] = 0.  # Black Matching Lines
+        if do_ransac:
+            match_style["colors"][:, 3] = 1.
+        match_style["linewidths"] *= 6 if do_ransac else 3
 
         match_lines = LineCollection(match_segments[good_matches],
                                      **match_style
@@ -178,6 +229,11 @@ def main(kitti_path, seq, frame, weights_path, save_path: Path, loop_file="loop_
                       # **style.tgt_point_cloud
                       s=0.1, c="#FF0000", marker="o", lw=0,
                       )
+
+        ax.axis('off')
+        ax.set_aspect('equal')
+        ax.patch.set_facecolor("white")
+        ax.patch.set_edgecolor("none")
 
         fig.tight_layout(pad=0.05)
 
@@ -200,6 +256,10 @@ def cli_args():
 
     parser.add_argument("--save_path", type=Path,
                         default=Path("/home/arceyd/MT/res/animations/matches"))
+
+    parser.add_argument("--do_ransac", action="store_true")
+
+    parser.add_argument("--use_gt_tf", action="store_true")
 
     # parser.add_argument("--gpu", "-g", type=int, default=0)
     #

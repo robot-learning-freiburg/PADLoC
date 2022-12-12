@@ -14,7 +14,7 @@ import torch
 from datasets.Freiburg import FreiburgDataset
 from datasets.KITTI_data_loader import KITTILoader3DPoses
 
-positive_distance = 25.
+positive_distance = 10.
 
 def compute_PR(pair_dist, poses, map_tree_poses, is_distance=True, ignore_last=False):
     real_loop = []
@@ -108,9 +108,10 @@ if __name__ == '__main__':
     marker = 'x'
     markevery = 0.03
 
-    pd_ours = np.load(f'pairs_dist_ours_freiburg_noground.npz')['arr_0']
+    # pd_ours = np.load(f'pairs_dist_ours_freiburg_noground.npz')['arr_0']
+    pd_ours = np.load("/home/shared/padloc/padloc_pairs/eval_lcd_padloc_220527191054_lastiter_frbg.npz")["arr_0"]
     # pd_ours = np.load(f'/home/cattaneo/lcd-comparison/build/pairs_dist_SC_freiburg.npz')['arr_0']
-    pd_ours2 = np.load(f'pairs_dist_ours360_freiburg_noground.npz')['arr_0']
+    # pd_ours2 = np.load(f'pairs_dist_ours360_freiburg_noground.npz')['arr_0']
 
     dataset_for_recall = FreiburgDataset(dataset_path)
     poses = np.stack(dataset_for_recall.poses)
@@ -129,22 +130,23 @@ if __name__ == '__main__':
     plt.scatter(poses[np.nonzero(fn)[0]+201, 0, 3], poses[np.nonzero(fn)[0]+201, 1, 3], c='b', s=15)
     plt.scatter(poses[np.nonzero(tp)[0]+201, 0, 3], poses[np.nonzero(tp)[0]+201, 1, 3], c=[(77./255, 175./255, 74./255)], s=15)
     # plt.show()
-    fig.savefig(f'./results_for_paper/new/freiburg_path.pdf', bbox_inches='tight', pad_inches=0)
+    # fig.savefig(f'./results_for_paper/new/freiburg_path.pdf', bbox_inches='tight', pad_inches=0)
+    fig.savefig(f'/home/shared/padloc/res/padloc_freiburg_10m_200_201f.pdf', bbox_inches='tight', pad_inches=0)
 
 
-    tp, fp, fn = compute_PR(pd_ours2, poses, map_tree_poses)
-    plt.clf()
-    fig = plt.figure()
-    frame1 = plt.gca()
-    frame1.axes.get_xaxis().set_visible(False)
-    frame1.axes.get_yaxis().set_visible(False)
-    frame1.axis("off")
-    plt.plot(poses[201:, 0, 3], poses[201:, 1, 3], 'lightgray')
-    plt.scatter(poses[np.nonzero(fp)[0]+201, 0, 3], poses[np.nonzero(fp)[0]+201, 1, 3], c=[(228./255, 26./255, 28./255)], s=15)
-    plt.scatter(poses[np.nonzero(fn)[0]+201, 0, 3], poses[np.nonzero(fn)[0]+201, 1, 3], c='b', s=15)
-    plt.scatter(poses[np.nonzero(tp)[0]+201, 0, 3], poses[np.nonzero(tp)[0]+201, 1, 3], c=[(77./255, 175./255, 74./255)], s=15)
-    # plt.show()
-    fig.savefig(f'./results_for_paper/new/freiburg_path_trained360.pdf', bbox_inches='tight', pad_inches=0)
+    # tp, fp, fn = compute_PR(pd_ours2, poses, map_tree_poses)
+    # plt.clf()
+    # fig = plt.figure()
+    # frame1 = plt.gca()
+    # frame1.axes.get_xaxis().set_visible(False)
+    # frame1.axes.get_yaxis().set_visible(False)
+    # frame1.axis("off")
+    # plt.plot(poses[201:, 0, 3], poses[201:, 1, 3], 'lightgray')
+    # plt.scatter(poses[np.nonzero(fp)[0]+201, 0, 3], poses[np.nonzero(fp)[0]+201, 1, 3], c=[(228./255, 26./255, 28./255)], s=15)
+    # plt.scatter(poses[np.nonzero(fn)[0]+201, 0, 3], poses[np.nonzero(fn)[0]+201, 1, 3], c='b', s=15)
+    # plt.scatter(poses[np.nonzero(tp)[0]+201, 0, 3], poses[np.nonzero(tp)[0]+201, 1, 3], c=[(77./255, 175./255, 74./255)], s=15)
+    # # plt.show()
+    # fig.savefig(f'./results_for_paper/new/freiburg_path_trained360.pdf', bbox_inches='tight', pad_inches=0)
 
 
     print("Done!")

@@ -1,4 +1,6 @@
 import argparse
+import json
+import os
 import pickle
 
 import faiss
@@ -17,7 +19,9 @@ from models.get_models import load_model
 from utils.data import merge_inputs
 from utils.tools import set_seed
 from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointnet2_utils import furthest_point_sample
-from evaluation_comparison.plot_PR_curve import compute_PR, compute_AP, compute_PR_pairs
+from evaluation_comparison.plot_PR_curve import compute_AP, compute_PR_pairs
+from evaluation_comparison.metrics.detection import compute_pr_fp, generate_pairs, compute_pr_fn, compute_f1_from_pr,\
+    compute_ep_from_pr, load_pairs_file, PR
 
 torch.backends.cudnn.benchmark = True
 
@@ -153,12 +157,15 @@ class BatchSamplePairs(BatchSampler):
             yield current_batch
 
 
-def main_process(gpu, weights_path, args):
-    global EPOCH
-    rank = gpu
+def load_poses(dataset_path, seq, without_ground):
+    dataset_for_recall = FordCampusDataset(dataset_path, seq=seq,
+                                           without_ground=without_ground)
+    map_tree_poses = KDTree(np.stack(dataset_for_recall.poses)[:, :3, 3])
 
-    set_seed(args.seed)
+    return dataset_for_recall, map_tree_poses
 
+
+def do_inference(gpu, weights_path, args):
     torch.cuda.set_device(gpu)
     device = torch.device(gpu)
 
@@ -203,8 +210,7 @@ def main_process(gpu, weights_path, args):
     #                                         os.path.join(args.data, 'sequences', sequences_validation[0],'poses_SEMANTICKITTI.txt'),
     #                                         exp_cfg['num_points'], device, train=False,
     #                                         without_ground=exp_cfg['without_ground'], loop_file=exp_cfg['loop_file'])
-    dataset_for_recall = FordCampusDataset(args.data, seq=args.seq,
-                                           without_ground=exp_cfg['without_ground'])
+    dataset_for_recall, map_tree_poses = load_poses(args.data, args.seq, exp_cfg["without_ground"])
 
     # dataset_list_valid = [dataset_for_recall]
 
@@ -254,11 +260,9 @@ def main_process(gpu, weights_path, args):
     model.train()
     model = model.to(device)
 
-    map_tree_poses = KDTree(np.stack(dataset_for_recall.poses)[:, :3, 3])
-
-    local_iter = 0.
-    transl_error_sum = 0
-    yaw_error_sum = 0
+    # local_iter = 0.
+    # transl_error_sum = 0
+    # yaw_error_sum = 0
     emb_list_map = []
     rot_errors = []
     transl_errors = []
@@ -311,37 +315,92 @@ def main_process(gpu, weights_path, args):
     # map_tree = KDTree(emb_list_map)
 
     # Recall@k
-    recall = np.zeros(10)
-    total_frame = 0
+    # recall = np.zeros(10)
+    # total_frame = 0
 
     emb_list_map_norm = emb_list_map / np.linalg.norm(emb_list_map, axis=1, keepdims=True)
     pair_dist = faiss.pairwise_distances(emb_list_map_norm, emb_list_map_norm)
+
     if args.pr_filename:
         print(f"Saving Pairwise Distances to {args.pr_filename}")
         np.savez(args.pr_filename, pair_dist)
+
+    return dataset_for_recall, map_tree_poses, pair_dist
+
+
+def main_process(gpu, weights_path, args):
+    global EPOCH
+    # rank = gpu
+
+    set_seed(args.seed)
+
+    run_inference = True
+    if args.pr_filename is not None and not args.force_inference:
+        if os.path.isfile(args.pr_filename):
+            run_inference = False
+
+    if run_inference:
+        print("Running inference")
+        dataset_for_recall, map_tree_poses, pair_dist = do_inference(gpu=gpu, weights_path=weights_path, args=args)
+    else:
+        print(f"Loading pairwise descriptor distances from {args.pr_filename}")
+        dataset_for_recall, map_tree_poses = load_poses(dataset_path=args.data, seq=args.seq, without_ground=False)
+        pair_dist = load_pairs_file(args.pr_filename)
+
+    if args.crop_pairs:
+        pair_dist = pair_dist[args.crop_pairs:, args.crop_pairs:]
     poses = np.stack(dataset_for_recall.poses)
-    precision_ours_fn, recall_ours_fn, precision_ours_fp, recall_ours_fp = compute_PR(pair_dist, poses, map_tree_poses)
-    ap_ours_fp = compute_AP(precision_ours_fp, recall_ours_fp)
-    ap_ours_fn = compute_AP(precision_ours_fn, recall_ours_fn)
+    pairs = generate_pairs(pair_dist=pair_dist, poses=poses, map_tree_poses=map_tree_poses,
+                           positive_distance=args.pos_distance,
+                           negative_frames=args.neg_frames, start_frame=args.start_frame,
+                           ignore_last=args.ignore_last, is_distance=args.not_distance)
+    pr_fp = compute_pr_fp(pairs=pairs, positive_distance=args.pos_distance)
+    ap_ours_fp = compute_AP(pr_fp.precision, pr_fp.recall)
+    f1_ours_fp = compute_f1_from_pr(precision_recall=pr_fp)
+    ep_ours_fp = compute_ep_from_pr(precision_recall=pr_fp)
+    f1_max_ours_fp = np.nanmax(f1_ours_fp)
+    pr_fn = compute_pr_fn(pairs=pairs, positive_distance=args.pos_distance)
+    ap_ours_fn = compute_AP(pr_fn.precision, pr_fn.recall)
+    f1_ours_fn = compute_f1_from_pr(precision_recall=pr_fn)
+    ep_ours_fn = compute_ep_from_pr(precision_recall=pr_fn)
+    f1_max_ours_fn = np.nanmax(f1_ours_fn)
     print(weights_path)
-    print(exp_cfg['test_sequence'])
+    print(args.seq)
     print("AP FP: ", ap_ours_fp)
+    print("F1 Max FP: ", f1_max_ours_fp)
+    print("EP FP: ", ep_ours_fp)
     print("AP FN: ", ap_ours_fn)
+    print("F1 Max FN: ", f1_max_ours_fn)
+    print("EP FN: ", ep_ours_fn)
     precision_pair_ours, recall_pair_ours = compute_PR_pairs(pair_dist, poses)
+    pr_pairs = PR(precision=np.array(precision_pair_ours), recall=np.array(recall_pair_ours))
+    f1_ours_pair = compute_f1_from_pr(precision_recall=pr_pairs)
+    ep_ours_pair = compute_ep_from_pr(precision_recall=pr_pairs)
+    f1_max_ours_pair = np.nanmax(f1_ours_pair)
     precision_pair_ours = [x for _, x in sorted(zip(recall_pair_ours, precision_pair_ours))]
     recall_pair_ours = sorted(recall_pair_ours)
     ap_ours_pair = compute_AP(precision_pair_ours, recall_pair_ours)
     print("AP Pairs: ", ap_ours_pair)
+    print("F1 Max Pairs: ", f1_max_ours_pair)
+    print("EP Pairs: ", ep_ours_pair)
+
     if args.stats_filename:
-        save_dict = {
-            "AP_FP": ap_ours_fp,
-            "AP_FN": ap_ours_fn,
-            "AP_Pairs": ap_ours_pair
-        }
+        save_dict = dict(
+            AP_FP=ap_ours_fp,
+            AP_FN=ap_ours_fn,
+            AP_Pairs=ap_ours_pair,
+            F1_max_FP=f1_max_ours_fp,
+            F1_max_FN=f1_max_ours_fn,
+            F1_max_Pairs=f1_max_ours_pair,
+            EP_FP=ep_ours_fp,
+            EP_FN=ep_ours_fn,
+            EP_Pairs=ep_ours_pair,
+        )
 
         print(f"Saving Stats file to {args.stats_filename}.")
-        with open(args.stats_filename, "wb") as f:
-            pickle.dump(save_dict, f)
+        with open(args.stats_filename, "w") as f:
+            json.dump(save_dict, f, indent=2)
+            # pickle.dump(save_dict, f)
     # # FAISS
     # real_loop = []
     # detected_loop = []
@@ -484,7 +543,8 @@ def main_process(gpu, weights_path, args):
     #     index.add(emb_list_map_norm[i-50:i-49])
     #     nearest = index.search(emb_list_map_norm[i:i+1], 1)
     #
-    #     distance_after_verification = geometric_verification(model, dataset_for_recall, i, nearest[1][0][0], device, exp_cfg)
+    #     distance_after_verification = geometric_verification(model, dataset_for_recall, i, nearest[1][0][0],
+    #     device, exp_cfg)
     #
     #     detected_loop.append(-nearest[0][0][0])
     #     candidate_pose = dataset_for_recall.poses[nearest[1][0][0]][:3, 3]
@@ -534,7 +594,18 @@ if __name__ == '__main__':
     parser.add_argument("--stats_filename", type=str, default=None)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--non_deterministic", action="store_true")
+    parser.add_argument("--force_inference", action="store_true",
+                        help="Runs inference. If the PR file already exists, it is overwritten.")
+    parser.add_argument("--pos_distance", type=float, default=10.)
+    parser.add_argument("--neg_frames", type=int, default=1000)
+    parser.add_argument("--start_frame", type=int, default=2000)
+    parser.add_argument("--not_distance", action="store_false",
+                        help="")
+    parser.add_argument("--ignore_last", action="store_true",
+                        help="")
+    parser.add_argument("--crop_pairs", type=int, default=74,
+                        help="")
 
-    args = parser.parse_args()
+    main_args = parser.parse_args()
 
-    main_process(0, args.weights_path, args)
+    main_process(gpu=0, weights_path=main_args.weights_path, args=main_args)

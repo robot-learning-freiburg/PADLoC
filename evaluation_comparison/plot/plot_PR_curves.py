@@ -99,11 +99,10 @@ def compute_and_plot_pr(*, pair_files: List[Dataset],
                                    ignore_last=pair_file.ignore_last, is_distance=pair_file.is_dist)
 
             for pr_plot in pr_plots:
-                pr = pr_plot.pr_func(detected_loop=pairs.detected_loops, real_loop=pairs.real_loops,
-                                     distances=pairs.distances, positive_distance=dataset.positive_dist)
+                pr = pr_plot.pr_func(pairs=pairs, positive_distance=dataset.positive_dist)
                 pr_curve = PRCurve(label=pair_file.label, precision=pr.precision, recall=pr.recall,
                                    marker=pair_file.marker)
-                precision_recall_curves[pr_plot.title].append(pr_curve)
+                precision_recall_curvesprecision_recall_curves[pr_plot.title].append(pr_curve)
 
         for title, pr_curves in precision_recall_curves.items():
             plot_title = f"{title}{dataset_str}"
@@ -170,6 +169,9 @@ def main():
                     #          is_dist=True, ignore_last=False, marker="x"),
                     PairFile(label="PADLoC", path=pair_path / "padloc_220527191054" / "lastiter" / "kitt" / "lcd" /
                              "eval_lcd_padloc_220527191054_lastiter_kitt_seq_08.npz",
+                             is_dist=True, ignore_last=False, marker="x"),
+                    PairFile(label="RINet", path=pair_path / "rinet" / "kitt08" / "kitt" / "lcd" /
+                             "pairs_rinetk08_kitti_seq08_orig_desc.npz",
                              is_dist=True, ignore_last=False, marker="x"),
                 ]),
     ]

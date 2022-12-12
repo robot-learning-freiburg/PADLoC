@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Callable, Optional
+from typing import Callable, List, Optional, Tuple
 
 import open3d as o3d
 try:
@@ -11,6 +11,12 @@ except AttributeError:
 import torch
 import torch.nn.functional as F
 
+# Type hints
+Transform = torch.Tensor
+O3DRegResult = reg_module.RegistrationResult
+RegResult = Tuple[Transform, O3DRegResult]
+BatchRegResult = Tuple[Transform, List[O3DRegResult]]
+
 
 def ransac_registration(*,
                         anc_coords: torch.Tensor,
@@ -18,16 +24,16 @@ def ransac_registration(*,
                         pos_coords: torch.Tensor,
                         pos_feats: torch.Tensor,
                         initial_transformation: Optional[torch.Tensor] = None,
-                        ) -> torch.Tensor:
+                        ) -> RegResult:
 
     pcd1 = o3d.geometry.PointCloud()
     pcd1.points = o3d.utility.Vector3dVector(anc_coords.cpu().numpy())
     pcd2 = o3d.geometry.PointCloud()
     pcd2.points = o3d.utility.Vector3dVector(pos_coords.cpu().numpy())
     pcd1_feat = reg_module.Feature()
-    pcd1_feat.data = anc_feats.permute(0, 1).cpu().numpy()
+    pcd1_feat.data = anc_feats.permute(0, 1).detach().cpu().numpy()
     pcd2_feat = reg_module.Feature()
-    pcd2_feat.data = pos_feats.permute(0, 1).cpu().numpy()
+    pcd2_feat.data = pos_feats.permute(0, 1).detach().cpu().numpy()
 
     torch.cuda.synchronize()
 
@@ -45,14 +51,14 @@ def ransac_registration(*,
 
     # time_ransac.toc()
     transformation = torch.tensor(result.transformation.copy())
-    return transformation
+    return transformation, result
 
 
 def icp_registration(*,
                      anc_coordinates: torch.Tensor,
                      pos_coordinates: torch.Tensor,
                      initial_transformation: torch.Tensor
-                     ) -> torch.Tensor:
+                     ) -> RegResult:
 
     p1 = o3d.geometry.PointCloud()
     p1.points = o3d.utility.Vector3dVector(anc_coordinates.cpu().numpy())
@@ -67,7 +73,7 @@ def icp_registration(*,
 
     transformation = torch.tensor(result.transformation.copy())
 
-    return transformation
+    return transformation, result
 
 
 def batch_coord_feat_registration(*,
@@ -76,8 +82,9 @@ def batch_coord_feat_registration(*,
                                   batch_feats: torch.Tensor,
                                   batch_size: int,
                                   initial_transformations: Optional[torch.Tensor] = None,
-                                  ) -> torch.Tensor:
+                                  ) -> BatchRegResult:
     transformations = []
+    results = []
     for i in range(batch_size // 2):
         coords1 = batch_coords[i]
         coords2 = batch_coords[i + batch_size // 2]
@@ -89,12 +96,13 @@ def batch_coord_feat_registration(*,
         else:
             initial_transformation = None
 
-        transformation = reg_func(anc_coords=coords1[:, 1:], anc_feats=feat1,
-                                  pos_coords=coords2[:, 1:], pos_feats=feat2,
-                                  initial_transformation=initial_transformation)
+        transformation, result = reg_func(anc_coords=coords1[:, 1:], anc_feats=feat1,
+                                          pos_coords=coords2[:, 1:], pos_feats=feat2,
+                                          initial_transformation=initial_transformation)
 
         transformations.append(transformation)
-    return torch.stack(transformations)
+        results.append(result)
+    return torch.stack(transformations), results
 
 
 def batch_coord_registration(*,
@@ -102,8 +110,9 @@ def batch_coord_registration(*,
                              batch_coords: torch.Tensor,
                              batch_size: int,
                              initial_transformations: Optional[torch.Tensor] = None,
-                             ) -> torch.Tensor:
+                             ) -> BatchRegResult:
     transformations = []
+    results = []
     for i in range(batch_size // 2):
         coords1 = batch_coords[i]
         coords2 = batch_coords[i + batch_size // 2]
@@ -113,11 +122,12 @@ def batch_coord_registration(*,
         else:
             initial_transformation = None
 
-        transformation = reg_func(anc_coords=coords1[:, 1:], pos_coords=coords2[:, 1:],
-                                  initial_transformation=initial_transformation)
+        transformation, result = reg_func(anc_coords=coords1[:, 1:], pos_coords=coords2[:, 1:],
+                                          initial_transformation=initial_transformation)
 
         transformations.append(transformation)
-    return torch.stack(transformations)
+        results.append(result)
+    return torch.stack(transformations), results
 
 
 def batch_ransac_registration(*,
@@ -125,7 +135,7 @@ def batch_ransac_registration(*,
                               batch_feats: torch.Tensor,
                               batch_size: int,
                               initial_transformations: Optional[torch.Tensor] = None,
-                              ) -> torch.Tensor:
+                              ) -> BatchRegResult:
     return batch_coord_feat_registration(
         reg_func=ransac_registration,
         batch_coords=batch_coords, batch_feats=batch_feats,
@@ -138,7 +148,7 @@ def batch_icp_registration(*,
                            batch_coords: torch.Tensor,
                            batch_size: int,
                            initial_transformations: Optional[torch.Tensor] = None,
-                           ) -> torch.Tensor:
+                           ) -> BatchRegResult:
     return batch_coord_registration(
         reg_func=icp_registration, batch_coords=batch_coords,
         batch_size=batch_size,
@@ -146,7 +156,11 @@ def batch_icp_registration(*,
     )
 
 
-def get_ransac_features(batch_dict, model, use_qk=True):
+def get_ransac_features(
+        batch_dict: dict,
+        model: torch.nn.Module,
+        use_qk: bool = True
+) -> torch.Tensor:
     """ Hacky way of extracting the Q and K from transformer based models."""
 
     features = batch_dict['point_features'].squeeze(-1)
