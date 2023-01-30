@@ -1,5 +1,5 @@
 # PADLoC
-[**arXiv**](https://arxiv.org/abs/2209.09699) | [**Website**](http://padloc.cs.uni-freiburg.de/)
+[**arXiv**](https://arxiv.org/abs/2209.09699) | [**IEEE Xplore**](https://ieeexplore.ieee.org/document/10024875) | [**Website**](http://padloc.cs.uni-freiburg.de/) | [**Video**](https://www.youtube.com/watch?v=o_pHmXuUjg0)
 
 This repository is the official implementation of the paper:
 
@@ -7,7 +7,7 @@ This repository is the official implementation of the paper:
 >
 > [José Arce](https://rl.uni-freiburg.de/people/arceyd), [Niclas Vödisch](https://vniclas.github.io/), [Daniele Cattaneo](https://rl.uni-freiburg.de/people/cattaneo), [Wolfram Burgard](http://www2.informatik.uni-freiburg.de/~burgard/), and [Abhinav Valada](https://rl.uni-freiburg.de/people/valada).
 >
-> *arXiv preprint arXiv:2209.09699*, 2022
+> *IEEE Robotics and Automation Letters (RA-L)*, vol. 8, issue 3, pp. 1319-1326, March 2023
 
 <p align="center">
   <img src="padloc_architecture.png" alt="Overview of PADLoC architecture" width="600" />
@@ -16,10 +16,13 @@ This repository is the official implementation of the paper:
 If you find our work useful, please consider citing our paper:
 ```
 @article{arce2022padloc,
-  title={PADLoC: LiDAR-Based Deep Loop Closure Detection and Registration using Panoptic Attention},
   author={Arce, Jos{\'e}, and V{\"o}disch, Niclas and Cattaneo, Daniele and Burgard, Wolfram and Valada, Abhinav},
-  journal={arXiv preprint arXiv:2209.09699},
-  year={2022}
+  journal={IEEE Robotics and Automation Letters},
+  title={PADLoC: LiDAR-Based Deep Loop Closure Detection and Registration Using Panoptic Attention},
+  year={2023},
+  volume={8},
+  number={3},
+  pages={1319-1326}
 }
 ```
 
