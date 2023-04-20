@@ -15,7 +15,7 @@ class PredictionGenerator:
     Parameters
     ----------
     nms_threshold : float
-        IoU threshold for the class-specific NMS
+        IoU thr for the class-specific NMS
     score_threshold : float
         Minimum class probability for a detection to be kept
     max_predictions : int
@@ -134,13 +134,13 @@ class ProposalMatcher:
     pos_ratio : float
         Fraction of `num_samples` reserved for positive proposals
     pos_threshold : float
-        Minimum IoU threshold to mark a proposal as positive
+        Minimum IoU thr to mark a proposal as positive
     neg_threshold_hi : float
-        Maximum IoU threshold to mark a proposal as negative / background
+        Maximum IoU thr to mark a proposal as negative / background
     neg_threshold_lo : float
-        Minimum IoU threshold to mark a proposal as negative / background
+        Minimum IoU thr to mark a proposal as negative / background
     void_threshold : float
-        If not zero, minimum overlap threshold with void regions to mark a proposal as void
+        If not zero, minimum overlap thr with void regions to mark a proposal as void
     """
 
     def __init__(self,

@@ -19,7 +19,7 @@ class ProposalGenerator:
     Parameters
     ----------
     nms_threshold : float
-        Intersection over union threshold for the NMS
+        Intersection over union thr for the NMS
     num_pre_nms_train : int
         Number of top-scoring proposals to feed to NMS, training mode
     num_post_nms_train : int
@@ -111,11 +111,11 @@ class AnchorMatcher:
     pos_ratio : float
         Maximum ratio of positives to keep for each image
     pos_threshold : float
-        Intersection over union threshold to assign positive labels
+        Intersection over union thr to assign positive labels
     neg_threshold : float
-        Intersection over union threshold to assign negative labels
+        Intersection over union thr to assign negative labels
     void_threshold : float
-        Overlap threshold to exclude anchors that overlap too much with group / crowd regions
+        Overlap thr to exclude anchors that overlap too much with group / crowd regions
     """
 
     def __init__(self,

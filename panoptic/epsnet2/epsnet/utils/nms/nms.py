@@ -5,7 +5,7 @@ def nms(bbx, scores, threshold=0.5, n_max=-1):
     """Perform non-maxima suppression
 
     Select up to n_max bounding boxes from bbx, giving priorities to bounding boxes with greater scores. Each selected
-    bounding box suppresses all other not yet selected boxes that intersect it by more than the given threshold.
+    bounding box suppresses all other not yet selected boxes that intersect it by more than the given thr.
 
     Parameters
     ----------
