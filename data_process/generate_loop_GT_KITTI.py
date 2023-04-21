@@ -1,11 +1,15 @@
-import torch
-from scipy.io import savemat
-from torch.utils.data import Dataset
-import pandas as pd
-import pykitti
-import os
-from sklearn.neighbors import KDTree
+#! /usr/bin/env python
+
+import logging
+from argparse import ArgumentParser
+from pathlib import Path
 import pickle
+from typing import List, Optional
+
+import torch
+from torch.utils.data import Dataset
+import pykitti
+from sklearn.neighbors import KDTree
 import numpy as np
 
 
@@ -85,43 +89,88 @@ class KITTILoader3DPosesOnlyLoopPositives(Dataset):
         return num_loop, positive_idxs, negative_idxs, hard_idxs
 
 
-if __name__ == '__main__':
-    base_dir = "/home/arceyd/MasterThesis/dat/kitti/dataset"
-    base_dir = "/Users/Jose/Documents/Homeworks/06 M.Sc. Informatik/Master Thesis in RL Chair/Data/KITTI/"
-    sequence = "00"
-    for sequence in ["00", "03", "04", "05", "06", "07", "08", "09"]:
-        # poses_file = base_dir + "/sequences/" + sequence + "/poses.csv"
-        poses_file = base_dir + "/sequences/" + sequence + "/poses.txt"
+def _arg_list(
+        arg: str,
+        delim=","
+):
+    return arg.split(delim)
+
+
+def cli_args() -> dict:
+    parser = ArgumentParser()
+
+    default_sequences = ["00", "03", "04", "05", "06", "07", "08", "09"]
+
+    parser.add_argument("--dataset_dir", "-d", type=Path,
+                        help="Path to the KITTI dataset.")
+    parser.add_argument("--output_dir", "-o", type=Path, default=None,
+                        help="Path where the GT loop closure files will be stored. "
+                             "If not specified, files will be saved in the dataset directory.")
+    parser.add_argument("--sequences", "-s", type=_arg_list, default=default_sequences,
+                        help=f"Comma separated list of the KITTI sequences to preprocess. "
+                             f"Default: \"{','.join(default_sequences)}\"")
+
+    args = parser.parse_args()
+
+    return vars(args)
+
+
+def generate_loop_GT_kitti(
+        dataset_dir: Path,
+        sequences: Optional[List[str]] = None,
+        output_dir: Optional[Path] = None,
+):
+
+    sequences = sequences if sequences is not None else ["00", "03", "04", "05", "06", "07", "08", "09"]
+    output_dir = output_dir if output_dir is not None else dataset_dir
+
+    logging.info(f"Pre-processing KITTI dataset.")
+    logging.info(f"Generating GT loop closure files for sequences {', '.join(sequences)}.")
+
+    for sequence in sequences:
+        logging.info(f"Generating GT loop closure file for sequence {sequence}.")
+        sequence_dir = dataset_dir / "sequences" / sequence
+        output_sequence_dir = output_dir / "sequences" / sequence
+        output_sequence_dir.mkdir(parents=True, exist_ok=True)
+        poses_file = sequence_dir / "poses.txt"
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        # dataset = KITTILoader3DPoses(dir, sequence, poses_file, 4096, device)
 
-        dataset = KITTILoader3DPosesOnlyLoopPositives(base_dir, sequence, poses_file, 1024, device, 4, 10, [6, 10])
+        dataset = KITTILoader3DPosesOnlyLoopPositives(dataset_dir, sequence, poses_file, 1024, device, 4, 10, [6, 10])
         lc_gt = []
-        lc_gt_file = os.path.join(base_dir, 'sequences', sequence, 'loop_GT_4m.pickle')
+        lc_gt_file = output_sequence_dir / "loop_GT_4m_.pickle"
+        lc_real_file = output_sequence_dir / f"real_loop_4m_{sequence}.pickle"
 
-        # savemat(f'GTPoses_{sequence}.mat', {'GTPoses': dataset.poses[:, :3, 3]})
         map_tree_poses = KDTree(dataset.poses[:, :3, 3])
         real_loop = []
         for i in range(100, dataset.poses.shape[0]):
-            min_range = max(0, i-50)
+            min_range = max(0, i - 50)
             current_pose = dataset.poses[i, :3, 3]
             indices = map_tree_poses.query_radius(np.expand_dims(current_pose, 0), 4)
             valid_idxs = list(set(indices[0]) - set(range(min_range, dataset.poses.shape[0])))
             if len(valid_idxs) > 0:
                 real_loop.append(i)
-        with open(f'real_loop_4m_{sequence}.pickle', 'wb') as f:
+
+        logging.info(f"Saving real loop file to {lc_real_file}.")
+        with open(lc_real_file, 'wb') as f:
             pickle.dump(real_loop, f)
 
         for i in range(len(dataset)):
-
             sample, pos, neg, hard = dataset[i]
             if sample > 0.:
-                print(i, sample)
-                sample_dict = {}
-                sample_dict['idx'] = i
-                sample_dict['positive_idxs'] = pos
-                sample_dict['negative_idxs'] = neg
-                sample_dict['hard_idxs'] = hard
+                logging.debug(f"\tLoop: {i}, {sample}")
+                sample_dict = dict(
+                    idx=i,
+                    positive_idxs=pos,
+                    negative_idxs=neg,
+                    hard_idxs=hard
+                )
                 lc_gt.append(sample_dict)
+
+        logging.info(f"Saving GT loop file to {lc_gt_file}.")
         with open(lc_gt_file, 'wb') as f:
             pickle.dump(lc_gt, f)
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
+    generate_loop_GT_kitti(**cli_args())
