@@ -63,11 +63,10 @@ RUN cd /padloc/models/backbone3D/Pointnet2_PyTorch && \
     cd pointnet2_ops_lib && \
     pip install -e .
 
-
-# cleanup of files from setup
-RUN apt-get clean
-RUN rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
-RUN mamba clean -afy
+# Cleanup setup files
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && \
+    mamba clean -afy
 
 # Setup user profile
 RUN echo -e "export PYTHONPATH=/padloc:\${PYTHONPATH}\nconda activate padloc\n" >> /root/.bashrc
