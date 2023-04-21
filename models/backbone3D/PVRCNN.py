@@ -66,7 +66,7 @@ class PVRCNN(nn.Module):
         self.point_feature_size = model_cfg.MODEL.PFE.NUM_OUTPUT_FEATURES
 
         # self.point_feature_encoder = PointFeatureEncoder(model_cfg.DATA_CONFIG.POINT_FEATURE_ENCODING, point_cloud_range)
-        self.data_processor = DataProcessor(model_cfg.DATA_CONFIG.DATA_PROCESSOR, point_cloud_range, training)
+        self.data_processor = DataProcessor(model_cfg.DATA_CONFIG.DATA_PROCESSOR, point_cloud_range, training, 4)
         self.vfe = MeanVFE(model_cfg, in_channel)
 
         self.reduce_input_dimensionality = False
