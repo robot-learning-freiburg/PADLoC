@@ -1284,13 +1284,13 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', default='/export/arceyd/dat/kitti/dataset',
+    parser.add_argument('--data', default='/data',
                         help='dataset directory')
     parser.add_argument('--dataset', default='kitti',
                         help='dataset')
     parser.add_argument('--epochs', default=100,
                         help='training epochs')
-    parser.add_argument('--checkpoints_dest', default='/home/arceyd/MasterThesis/cp',
+    parser.add_argument('--checkpoints_dest', default='/cp',
                         help='training epochs')
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='enables CUDA training')
@@ -1319,7 +1319,7 @@ if __name__ == '__main__':
     parser.add_argument('--print_other_losses', action='store_true', default=False,
                         help='Print other losses during training')
 
-    parser.add_argument('--config', default="wandb_config.yaml")
+    parser.add_argument('--config', default="wandb_config_padloc.yaml")
 
     args, override_cfg = parser.parse_known_args()
 
