@@ -1,12 +1,15 @@
-import torch
-from scipy.io import savemat
-from torch.utils.data import Dataset
-import pandas as pd
-import pykitti
-import os
-from sklearn.neighbors import KDTree
+#! /usr/bin/env python
+
+import logging
+from argparse import ArgumentParser
+from pathlib import Path
 import pickle
+from typing import List, Optional
+
 import numpy as np
+from sklearn.neighbors import KDTree
+import torch
+from torch.utils.data import Dataset
 
 
 class KITTI360(Dataset):
@@ -25,7 +28,7 @@ class KITTI360(Dataset):
         self.hard_range = hard_range
         self.dir = dir
         self.sequence = sequence
-        calib_file = os.path.join(dir, 'calibration', 'calib_cam_to_velo.txt')
+        calib_file = dir / "calibration" / "calib_cam_to_velo.txt"
         with open(calib_file, 'r') as f:
             for line in f.readlines():
                 data = np.array([float(x) for x in line.split()])
@@ -36,7 +39,7 @@ class KITTI360(Dataset):
 
         self.frames_with_gt = []
         poses2 = []
-        poses = os.path.join(dir, 'data_poses', sequence, 'cam0_to_world.txt')
+        poses = dir / "data_poses" / sequence / "cam0_to_world.txt"
         with open(poses, 'r') as f:
             for x in f:
                 x = x.strip().split()
@@ -98,22 +101,54 @@ class KITTI360(Dataset):
                hard_idxs
 
 
-if __name__ == '__main__':
-    base_dir = "/home/arceyd/MT/dat/kitti360"
-    sequence = "00"
-    for sequence in ["2013_05_28_drive_0000_sync", "2013_05_28_drive_0002_sync", "2013_05_28_drive_0003_sync",
-                     "2013_05_28_drive_0004_sync", "2013_05_28_drive_0005_sync", "2013_05_28_drive_0006_sync",
-                     "2013_05_28_drive_0007_sync", "2013_05_28_drive_0009_sync", "2013_05_28_drive_0010_sync"]:
+DEFAULT_SEQUENCES = [
+        "2013_05_28_drive_0000_sync", "2013_05_28_drive_0002_sync", "2013_05_28_drive_0003_sync",
+        "2013_05_28_drive_0004_sync", "2013_05_28_drive_0005_sync", "2013_05_28_drive_0006_sync",
+        "2013_05_28_drive_0007_sync", "2013_05_28_drive_0009_sync", "2013_05_28_drive_0010_sync"
+]
+
+
+def _arg_list(
+        arg: str,
+        delim=","
+):
+    return arg.split(delim)
+
+
+def cli_args() -> dict:
+    parser = ArgumentParser()
+
+    parser.add_argument("--dataset_dir", "-d", type=Path,
+                        help="Path to the KITTI dataset.")
+    parser.add_argument("--output_dir", "-o", type=Path, default=None,
+                        help="Path where the GT loop closure files will be stored. "
+                             "If not specified, files will be saved in the dataset directory.")
+    parser.add_argument("--sequences", "-s", type=_arg_list, default=DEFAULT_SEQUENCES,
+                        help=f"Comma separated list of the KITTI sequences to preprocess. "
+                             f"Default: \"{','.join(DEFAULT_SEQUENCES)}\"")
+
+    args = parser.parse_args()
+
+    return vars(args)
+
+
+def generate_loop_GT_kitti360(
+    dataset_dir: Path,
+    sequences: Optional[List[str]] = None,
+    output_dir: Optional[Path] = None,
+):
+    sequences = sequences if sequences is not None else DEFAULT_SEQUENCES
+    output_dir = output_dir if output_dir is not None else dataset_dir
+
+    for sequence in sequences:
         print(sequence)
-        # poses_file = base_dir + "/sequences/" + sequence + "/poses.csv"
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        # dataset = KITTILoader3DPoses(dir, sequence, poses_file, 4096, device)
 
-        dataset = KITTI360(base_dir, sequence, 4, 10, [6, 10])
+        dataset = KITTI360(dataset_dir, sequence, 4, 10, [6, 10])
         lc_gt = []
-        lc_gt_file = os.path.join(base_dir, 'data_poses', sequence, 'loop_GT_4m_noneg.pickle')
+        lc_gt_dir = output_dir / "data_poses" / sequence
+        lc_gt_dir.mkdir(parents=True, exist_ok=True)
+        lc_gt_file = lc_gt_dir / "loop_GT_4m_noneg.pickle"
 
-        # savemat(f'GTPoses_{sequence}.mat', {'GTPoses': dataset.poses[:, :3, 3]})
         map_tree_poses = KDTree(dataset.poses[:, :3, 3])
         real_loop = []
         for i in range(100, dataset.poses.shape[0]):
@@ -123,8 +158,6 @@ if __name__ == '__main__':
             valid_idxs = list(set(indices[0]) - set(range(min_range, dataset.poses.shape[0])))
             if len(valid_idxs) > 0:
                 real_loop.append(i)
-        # with open(f'real_loop_4m_{sequence}.pickle', 'wb') as f:
-        #     pickle.dump(real_loop, f)
 
         for i in range(len(dataset)):
 
@@ -132,11 +165,17 @@ if __name__ == '__main__':
             if sample > 0.:
                 idx = dataset.frames_with_gt[i]
                 print(idx, sample)
-                sample_dict = {}
-                sample_dict['idx'] = idx
-                sample_dict['positive_idxs'] = pos
-                sample_dict['negative_idxs'] = neg
-                sample_dict['hard_idxs'] = hard
+                sample_dict = dict(
+                    idx=idx,
+                    positive_idxs=pos,
+                    negative_idxs=neg,
+                    hard_idxs=hard
+                )
                 lc_gt.append(sample_dict)
         with open(lc_gt_file, 'wb') as f:
             pickle.dump(lc_gt, f)
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
+    generate_loop_GT_kitti360(**cli_args())
