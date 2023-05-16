@@ -57,6 +57,9 @@ docker run \
 | __--name__ ___NAME___                                  | Assigns a name to the running container, instead of using the auto-generated one. Useful for referring to the container.                                                                                            |
 | ___IMG___                                              | Docker image name                                                                                                                                                                                                   |
 
+> &#x26a0;&#xfe0f; The source code is not copied into the Docker image when built and must therefore be mounted to the
+> `/padloc` directory using the `-v` volume specification when running the container. See the example usage. 
+
 #### Example Usage
 
 Run the `padloc` docker container with all the GPUs, 64GB of memory, 16GB of shared memory and mounting the checkpoint,
@@ -68,6 +71,7 @@ docker run \
     --gpus all \
     -m 64g \
     --shm-size=16g \
+    -v '/path/to/source/code/':/padloc \
     -v '/path/to/kitti/dataset/':/data \
     -v '/path/to/cp/':/cp \
     -v '/path/to/output/':/output \
@@ -88,7 +92,6 @@ If you wish to setup your own Virtual or Anaconda environment, install the depen
 
 Then, install the following packages according to how it is done in the Dockerfile:
 * OpenPCDet
-* PointNet2
 
 >  &#x26a0;&#xfe0f; Versions of Open3D >= 0.15 have a different implementation of RANSAC that results in poor registration accuracy.
 > Please make sure to install a version of Open3D between 0.12.0 and 0.14.2 for the best results.

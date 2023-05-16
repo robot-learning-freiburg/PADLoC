@@ -236,5 +236,5 @@ if __name__ == "__main__":
     time_stats_wor = get_time_tables(get_raw=False)
     time_stats_woa = get_time_tables(get_agg=False)
 
-    json_time_table("/home/arceyd/Desktop/time_test.json")
-    pickle_time_table("/home/arceyd/Desktop/time_test.pickle")
+    json_time_table("~/time_test.json")
+    pickle_time_table("~/time_test.pickle")

@@ -1,7 +1,6 @@
 #! /usr/bin/env python
 
 import argparse
-from datasets.NCLTDataset import NCLTDataset
 import os
 from pathlib import Path
 import json
@@ -18,7 +17,6 @@ from sklearn.neighbors import KDTree
 from torch.utils.data.sampler import Sampler, BatchSampler
 from tqdm import tqdm
 
-from datasets.Freiburg import FreiburgDataset
 from datasets.KITTI360Dataset import KITTI3603DPoses
 from datasets.KITTI_data_loader import KITTILoader3DPoses
 
@@ -26,43 +24,26 @@ from evaluation_comparison.metrics.detection import compute_pr_fp, compute_pr_fn
     compute_ap_from_pr, compute_ep_from_pr, compute_f1_from_pr,\
     generate_pairs, load_pairs_file
 from models.get_models import load_model
-from models.backbone3D.RandLANet.RandLANet import prepare_randlanet_input
-from models.backbone3D.RandLANet.helper_tool import ConfigSemanticKITTI2
 from utils.data import merge_inputs, Timer
 from utils.tools import set_seed
-from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointnet2_utils import furthest_point_sample
 
 torch.backends.cudnn.benchmark = True
 
 
 def prepare_input(model, samples, exp_cfg, device):
+    if exp_cfg["3D_net"] != "PVRCNN":
+        raise TypeError(f"Invalid 3D_net {exp_cfg['3D_net']}. Only 'PVRCNN' supported.")
     anchor_list = []
     for point_cloud in samples:
-        if exp_cfg["3D_net"] != "PVRCNN":
-            anchor_set = furthest_point_sample(point_cloud[:, 0:3].unsqueeze(0).contiguous(), exp_cfg["num_points"])
-            a = anchor_set[0, :].long()
-            anchor_i = point_cloud[a]
-        else:
-            anchor_i = point_cloud
+        anchor_i = point_cloud
+        anchor_list.append(model.backbone.prepare_input(anchor_i))
+        del anchor_i
 
-        if exp_cfg["3D_net"] != "PVRCNN":
-            anchor_list.append(anchor_i[:, :3].unsqueeze(0))
-        else:
-            anchor_list.append(model.backbone.prepare_input(anchor_i))
-            del anchor_i
-
-    if exp_cfg["3D_net"] != "PVRCNN":
-        point_cloud = torch.cat(tuple(anchor_list), 0)
-        model_in = point_cloud
-
-        if exp_cfg["3D_net"] == "RandLANet":
-            model_in = prepare_randlanet_input(ConfigSemanticKITTI2(), model_in.cpu(), device)
-    else:
-        model_in = KittiDataset.collate_batch(anchor_list)
-        for key, val in model_in.items():
-            if not isinstance(val, np.ndarray):
-                continue
-            model_in[key] = torch.from_numpy(val).float().to(device)
+    model_in = KittiDataset.collate_batch(anchor_list)
+    for key, val in model_in.items():
+        if not isinstance(val, np.ndarray):
+            continue
+        model_in[key] = torch.from_numpy(val).float().to(device)
     return model_in
 
 
@@ -185,10 +166,6 @@ def load_poses(
         dataset_for_recall = KITTI3603DPoses(data, sequence,
                                              train=False,
                                              without_ground=without_ground, loop_file="loop_GT_4m_noneg")
-    elif dataset == "freiburg":
-        dataset_for_recall = FreiburgDataset(data, without_ground=without_ground, z_offset=z_offset)
-    elif dataset == "nclt":
-        dataset_for_recall = NCLTDataset(data, sequence)
     else:
         raise ValueError(f"Invalid dataset {dataset}.")
 
@@ -222,17 +199,16 @@ def do_inference(
         if dataset == "kitti":
             override_cfg["test_sequence"] = "08"
 
-        elif dataset == "nclt":
-            override_cfg["test_sequence"] = "2013-04-05"
-
         elif dataset == "kitti360":
             override_cfg["test_sequence"] = "2013_05_28_drive_0002_sync"
 
-        if dataset != "freiburg":
-            sequences_validation = [override_cfg["test_sequence"]]
-            sequence = sequences_validation[0]
+        sequences_validation = [override_cfg["test_sequence"]]
+        sequence = sequences_validation[0]
 
     model, exp_cfg = load_model(weights_path, override_cfg_dict=override_cfg)
+
+    if exp_cfg["3D_net"] != "PVRCNN":
+        raise TypeError(f"Invalid 3D_net {exp_cfg['3D_net']}. Only 'PVRCNN' supported.")
 
     dataset_for_recall, map_tree_poses = load_poses(dataset, data, sequence, device,
                                                     exp_cfg["num_points"],
@@ -266,34 +242,18 @@ def do_inference(
 
             anchor_list = []
             for i in range(len(sample["anchor"])):
-                anchor = sample["anchor"][i].to(device)
+                anchor_i = sample["anchor"][i].to(device)
 
-                if exp_cfg["3D_net"] != "PVRCNN":
-                    anchor_set = furthest_point_sample(anchor[:, 0:3].unsqueeze(0).contiguous(), exp_cfg["num_points"])
-                    a = anchor_set[0, :].long()
-                    anchor_i = anchor[a]
-                else:
-                    anchor_i = anchor
+                if exp_cfg["use_semantic"] or exp_cfg["use_panoptic"]:
+                    anchor_i = torch.cat((anchor_i, sample["anchor_logits"][i].to(device)), dim=1)
+                anchor_list.append(model.backbone.prepare_input(anchor_i))
+                del anchor_i
 
-                if exp_cfg["3D_net"] != "PVRCNN":
-                    anchor_list.append(anchor_i[:, :3].unsqueeze(0))
-                else:
-                    if exp_cfg["use_semantic"] or exp_cfg["use_panoptic"]:
-                        anchor_i = torch.cat((anchor_i, sample["anchor_logits"][i].to(device)), dim=1)
-                    anchor_list.append(model.backbone.prepare_input(anchor_i))
-                    del anchor_i
-
-            if exp_cfg["3D_net"] != "PVRCNN":
-                anchor = torch.cat(anchor_list)
-                model_in = anchor
-                if exp_cfg["3D_net"] == "RandLANet":
-                    model_in = prepare_randlanet_input(ConfigSemanticKITTI2(), model_in.cpu(), device)
-            else:
-                model_in = KittiDataset.collate_batch(anchor_list)
-                for key, val in model_in.items():
-                    if not isinstance(val, np.ndarray):
-                        continue
-                    model_in[key] = torch.from_numpy(val).float().to(device)
+            model_in = KittiDataset.collate_batch(anchor_list)
+            for key, val in model_in.items():
+                if not isinstance(val, np.ndarray):
+                    continue
+                model_in[key] = torch.from_numpy(val).float().to(device)
 
             batch_dict = model(model_in, metric_head=False, compute_rotation=False, compute_transl=False)
 

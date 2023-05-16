@@ -45,14 +45,6 @@ class TransformerHead(nn.Module):
 		inverse_tf_loss_weight = kwargs['inv_tf_weight']
 		self._compute_reverse_tf = panoptic_loss_weight > 0 or inverse_tf_loss_weight > 0
 
-		# self._desc_decoder_layer = nn.TransformerDecoderLayer(d_model=num_points, nhead=1, dim_feedforward=256)
-		# self.desc_decoder = nn.TransformerDecoder(self._desc_decoder_layer, 1)
-
-		#self.FC1 = nn.Linear(feat_size, desc_size)
-		#self.FC2 = nn.Linear(num_points, hidden_size)
-		#self.FC3 = nn.Linear(hidden_size, desc_size)
-		#self.relu = nn.ReLU()
-
 		self.wQ = nn.Parameter(torch.rand(n_dec_layers, feat_size, self.key_size))
 		self.wK = nn.Parameter(torch.rand(n_dec_layers, feat_size, self.key_size))
 
@@ -69,13 +61,9 @@ class TransformerHead(nn.Module):
 
 		# Generate Global Descriptor
 		if self.descriptor_head != "NetVLAD":
-			#descriptor = self.desc_decoder(src)
 
 			descriptor = self.relu(self.FC1(src.permute(1, 2, 0)))
 			descriptor, _ = torch.max(descriptor, dim=1)
-
-			#descriptor = self.relu(self.FC2(descriptor.reshape(B, P)))
-			#descriptor = self.relu(self.FC3(descriptor))
 
 			batch_dict['out_embedding'] = descriptor
 
@@ -92,15 +80,13 @@ class TransformerHead(nn.Module):
 		sqrt_key_size = np.sqrt(self.key_size)
 		attn1 = torch.matmul(queries[:B, :, :], keys_T[B:2*B, :, :])
 		attn1 = attn1 / sqrt_key_size
-		#attn1 = torch.softmax(attn1, dim=2)
 
 		# My Ideas: Sum up all the attention matrices and normalize them by rows to
 		# get the matching matrices
 
 		matching1 = torch.sum(attn1, 1)
 		matching1 = torch.relu(matching1)  # ReLU activation to remove negative values
-		# matching1 = torch.log(matching1)
-		#matching1 = torch.softmax(matching1, dim=1)
+
 		row_sum1 = matching1.sum(-1, keepdim=True)
 		row_sum1[row_sum1 == 0] = 1
 		row_sum1 = 1 / row_sum1
@@ -113,7 +99,6 @@ class TransformerHead(nn.Module):
 
 		sinkhorn_matches1 = torch.matmul(matching1, coords2)
 
-		# batch_dict['sinkhorn_matches'] = sinkhorn_matches1
 		batch_dict['transport'] = matching1
 
 		transformation1 = compute_rigid_transform(coords1, sinkhorn_matches1, row_sum1.squeeze(-1))

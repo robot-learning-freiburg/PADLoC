@@ -22,10 +22,7 @@ from evaluation_comparison.metrics.registration import get_ransac_features
 from datasets.KITTI360Dataset import KITTI3603DPoses
 from datasets.KITTI_data_loader import KITTILoader3DPoses
 from models.get_models import load_model
-from models.backbone3D.RandLANet.RandLANet import prepare_randlanet_input
-from models.backbone3D.RandLANet.helper_tool import ConfigSemanticKITTI2
 from utils.data import merge_inputs, Timer
-from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointnet2_utils import furthest_point_sample
 from utils.geometry import mat2xyzrpy
 import utils.rotation_conversion as RT
 from utils.qcqp_layer import QuadQuatFastSolver
@@ -44,43 +41,28 @@ EPOCH = 1
 
 def get_database_embs(model, sample, exp_cfg, device):
     model.eval()
-    margin = exp_cfg["margin"]
+
+    if exp_cfg["training_type"] != "3D":
+        raise TypeError(f"Invalid training_type {exp_cfg['training_type']}. Only '3D' supported.")
+
+    if exp_cfg["3D_net"] != "PVRCNN":
+        raise TypeError(f"Invalid 3D_net {exp_cfg['3D_net']}. Only 'PVRCNN' supported.")
 
     with torch.no_grad():
-        if exp_cfg["training_type"] == "3D":
-            anchor_list = []
-            for i in range(len(sample["anchor"])):
-                anchor = sample["anchor"][i].to(device)
+        anchor_list = []
+        for i in range(len(sample["anchor"])):
+            anchor_i = sample["anchor"][i].to(device)
+            anchor_list.append(model.backbone.prepare_input(anchor_i))
+            del anchor_i
 
-                if exp_cfg["3D_net"] != "PVRCNN":
-                    anchor_set = furthest_point_sample(anchor[:, 0:3].unsqueeze(0).contiguous(), exp_cfg["num_points"])
-                    a = anchor_set[0, :].long()
-                    anchor_i = anchor[a]
-                else:
-                    anchor_i = anchor
+        model_in = KittiDataset.collate_batch(anchor_list)
+        for key, val in model_in.items():
+            if not isinstance(val, np.ndarray):
+                continue
+            model_in[key] = torch.from_numpy(val).float().to(device)
 
-                if exp_cfg["3D_net"] != "PVRCNN":
-                    anchor_list.append(anchor_i[:, :3].unsqueeze(0))
-                else:
-                    anchor_list.append(model.backbone.prepare_input(anchor_i))
-                    del anchor_i
-
-            if exp_cfg["3D_net"] != "PVRCNN":
-                anchor = torch.cat(tuple(anchor_list), 0)
-                model_in = anchor
-                model_in = model_in / 100.
-            else:
-                model_in = KittiDataset.collate_batch(anchor_list)
-                for key, val in model_in.items():
-                    if not isinstance(val, np.ndarray):
-                        continue
-                    model_in[key] = torch.from_numpy(val).float().to(device)
-
-            batch_dict = model(model_in, metric_head=False)
-            anchor_out = batch_dict["out_embedding"]
-
-        else:
-            anchor_out = model(sample["anchor"].to(device), metric_head=False)
+        batch_dict = model(model_in, metric_head=False)
+        anchor_out = batch_dict["out_embedding"]
 
     if exp_cfg["norm_embeddings"]:
         anchor_out = anchor_out / anchor_out.norm(dim=1, keepdim=True)
@@ -259,36 +241,19 @@ def main_process(gpu, weights_path, dataset, data, batch_size=8, sequence=None, 
 
                 anchor_list = []
                 for i in range(len(sample["anchor"])):
-                    anchor = sample["anchor"][i].to(device)
+                    anchor_i = sample["anchor"][i].to(device)
 
                     torch.cuda.synchronize()
                     time_net.tic()
 
-                    if exp_cfg["3D_net"] != "PVRCNN":
-                        anchor_set = furthest_point_sample(anchor[:, 0:3].unsqueeze(0).contiguous(),
-                                                           exp_cfg["num_points"])
-                        a = anchor_set[0, :].long()
-                        anchor_i = anchor[a]
-                    else:
-                        anchor_i = anchor
+                    anchor_list.append(model.backbone.prepare_input(anchor_i))
+                    del anchor_i
 
-                    if exp_cfg["3D_net"] != "PVRCNN":
-                        anchor_list.append(anchor_i[:, :3].unsqueeze(0))
-                    else:
-                        anchor_list.append(model.backbone.prepare_input(anchor_i))
-                        del anchor_i
-
-                if exp_cfg["3D_net"] != "PVRCNN":
-                    anchor = torch.cat(anchor_list)
-                    model_in = anchor
-                    if exp_cfg["3D_net"] == "RandLANet":
-                        model_in = prepare_randlanet_input(ConfigSemanticKITTI2(), model_in.cpu(), device)
-                else:
-                    model_in = KittiDataset.collate_batch(anchor_list)
-                    for key, val in model_in.items():
-                        if not isinstance(val, np.ndarray):
-                            continue
-                        model_in[key] = torch.from_numpy(val).float().to(device)
+                model_in = KittiDataset.collate_batch(anchor_list)
+                for key, val in model_in.items():
+                    if not isinstance(val, np.ndarray):
+                        continue
+                    model_in[key] = torch.from_numpy(val).float().to(device)
 
                 batch_dict = model(model_in, metric_head=True)
                 torch.cuda.synchronize()

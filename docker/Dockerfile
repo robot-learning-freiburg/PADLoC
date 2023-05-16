@@ -53,16 +53,6 @@ RUN git clone --depth 1 --branch v0.5.2 https://github.com/open-mmlab/OpenPCDet.
 RUN cd /OpenPCDet && \
     python setup.py develop
 
-COPY / /padloc
-WORKDIR /padloc
-
-# Install PointNet2 and PointNet2_ops
-RUN cd /padloc/models/backbone3D/Pointnet2_PyTorch && \
-    pip install -r requirements.txt && \
-    pip install -e . && \
-    cd pointnet2_ops_lib && \
-    pip install -e .
-
 # Cleanup setup files
 RUN apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && \

@@ -1,22 +1,13 @@
 import h5py
-import open3d as o3d
 import torch
 from pykitti.utils import read_calib_file
 from torch.utils.data import Dataset
-from torchvision import transforms
-from skimage import io
-from PIL import Image
 import os, os.path
 import pandas as pd
 import numpy as np
 import random
-from torchvision import transforms
 import pickle
 import pykitti
-from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointnet2_utils import furthest_point_sample
-from scipy.spatial.transform import Rotation as R
-
-import yaml
 
 import utils.rotation_conversion as RT
 from utils.semantic_superclass_mapper import SemanticSuperclassMapper
@@ -189,52 +180,6 @@ def unpack_logits(logits, use_logits, superclass_mapper, prefix, permute=None):
     }
 
     return sample
-
-class KITTILoader3DClasses(Dataset):
-    """KITTI ODOMETRY DATASET"""
-    """ WIP!!!"""
-    def __init__(self, dir, sequence, classes):
-        """
-
-        :param dataset: directory where dataset is located
-        :param sequence: KITTI sequence
-        :param classes: csv with positives and negatives loop closure
-        """
-
-        self.dir = dir
-        self.sequence = sequence
-        self.classes = classes
-        self.data = pykitti.odometry(dir, sequence)
-
-    def __len__(self):
-        return len(self.data.timestamps)
-
-    def __getitem__(self, idx):
-
-        anchor_pcd = torch.from_numpy(self.data.get_velo(idx))
-        anchor_col = self.classes.iloc[:, [idx + 1]]
-
-        positives = self.classes.loc[anchor_col == 1]
-        negatives = self.classes.loc[anchor_col == 0]
-
-        positive_idx = idx
-        if len(positives) != 1:
-            while positive_idx == idx:
-                positive_idx = random.choice(positives)
-        positive_pcd = torch.from_numpy(self.data.get_velo(positive_idx))
-
-        negative_idx = random.choice(negatives)
-        negative_pcd = torch.from_numpy(self.data.get_velo(negative_idx))
-
-        anchor_pcd = furthest_point_sample(anchor_pcd[:, 0:3])
-        positive_pcd = furthest_point_sample(positive_pcd[:, 0:3])
-        negative_pcd = furthest_point_sample(negative_pcd[:, 0:3])
-
-        sample = {'anchor': anchor_pcd,
-                  'positive': positive_pcd,
-                  'negative': negative_pcd}
-
-        return sample
 
 
 class KITTILoader3DPoses(Dataset):

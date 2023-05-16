@@ -5,7 +5,6 @@ import faulthandler; faulthandler.enable()
 import os
 import time
 from functools import partial
-from shutil import copy2
 
 import yaml
 import wandb
@@ -22,24 +21,18 @@ from torch.nn.parallel import DistributedDataParallel
 
 from datasets.KITTI360Dataset import KITTI3603DDictPairs, KITTI3603DPoses
 from datasets.KITTI_data_loader import KITTILoader3DPoses, KITTILoader3DDictPairs
-from datasets.NCLTDataset import NCLTDatasetPairs, NCLTDataset, NCLTDatasetTriplets
 from loss import TotalLossFunction
-from models.backbone3D.RandLANet.RandLANet import prepare_randlanet_input
-from models.backbone3D.RandLANet.helper_tool import ConfigSemanticKITTI2
 from models.get_models import get_model
 from utils.data import datasets_concat_kitti, merge_inputs, datasets_concat_kitti_triplets, datasets_concat_kitti360
 from evaluate_kitti import evaluate_model_with_emb
 from datetime import datetime
-from models.backbone3D.Pointnet2_PyTorch.pointnet2_ops_lib.pointnet2_ops.pointnet2_utils import furthest_point_sample
 from utils.geometry import get_rt_matrix, mat2xyzrpy
-# from utils.qcqp_layer import QuadQuatFastSolver
 from utils.rotation_conversion import quaternion_from_matrix, quat2mat
 from utils.tools import _pairwise_distance, update_bn_swa, SVDNonConvergenceError, NaNLossError
 
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.optim.swa_utils import SWALR, AveragedModel
-
 
 
 torch.backends.cudnn.benchmark = True
@@ -66,107 +59,109 @@ def move_from_sample_to_model_in(exp_cfg, sample, model_in):
 
 
 def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
-    # with torch.autograd.detect_anomaly():
-    if True:
-        model.train()
-        margin = exp_cfg['margin']
+    if exp_cfg["training_type"] != "3D":
+        raise TypeError(f"Invalid training_type {exp_cfg['training_type']}. Only '3D' supported.")
 
-        optimizer.zero_grad()
+    if exp_cfg["3D_net"] != "PVRCNN":
+        raise TypeError(f"Invalid 3D_net {exp_cfg['3D_net']}. Only 'PVRCNN' supported.")
 
-        if mode == 'pairs':
-            if 'sequence' in sample:
-                neg_mask = sample['sequence'].view(1,-1) != sample['sequence'].view(-1, 1)
-            else:
-                neg_mask = torch.zeros((sample['anchor_pose'].shape[0], sample['anchor_pose'].shape[0]),
-                                       dtype=torch.bool)
+    model.train()
+    margin = exp_cfg['margin']
 
-            pair_dist = _pairwise_distance(sample['anchor_pose'])
-            neg_mask = ((pair_dist > exp_cfg['negative_distance']) | neg_mask)
-            neg_mask = neg_mask.repeat(2, 2).to(device)
-        elif mode == 'triplets':
-            neg_mask = torch.zeros((sample['anchor_pose'].shape[0]*3, sample['anchor_pose'].shape[0]*3),
+    optimizer.zero_grad()
+
+    if mode == 'pairs':
+        if 'sequence' in sample:
+            neg_mask = sample['sequence'].view(1,-1) != sample['sequence'].view(-1, 1)
+        else:
+            neg_mask = torch.zeros((sample['anchor_pose'].shape[0], sample['anchor_pose'].shape[0]),
                                    dtype=torch.bool)
-            for i in range(sample['anchor_pose'].shape[0]):
-                neg_mask[i, i + 2*sample['anchor_pose'].shape[0]] = 1.
 
-        if exp_cfg['training_type'] != "3D":
-            raise NotImplementedError
+        pair_dist = _pairwise_distance(sample['anchor_pose'])
+        neg_mask = ((pair_dist > exp_cfg['negative_distance']) | neg_mask)
+        neg_mask = neg_mask.repeat(2, 2).to(device)
+    elif mode == 'triplets':
+        neg_mask = torch.zeros((sample['anchor_pose'].shape[0]*3, sample['anchor_pose'].shape[0]*3),
+                               dtype=torch.bool)
+        for i in range(sample['anchor_pose'].shape[0]):
+            neg_mask[i, i + 2*sample['anchor_pose'].shape[0]] = 1.
 
-        anchor_transl = sample['anchor_pose'].to(device)
-        positive_transl = sample['positive_pose'].to(device)
-        anchor_rot = sample['anchor_rot'].to(device)
-        positive_rot = sample['positive_rot'].to(device)
+    anchor_transl = sample['anchor_pose'].to(device)
+    positive_transl = sample['positive_pose'].to(device)
+    anchor_rot = sample['anchor_rot'].to(device)
+    positive_rot = sample['positive_rot'].to(device)
 
-        anchor_list = []
-        positive_list = []
-        negative_list = []
+    anchor_list = []
+    positive_list = []
+    negative_list = []
 
-        delta_transl = []
-        delta_rot = []
-        delta_pose = []
-        delta_quat = []
-        yaw_diff_list = []
-        for i in range(anchor_transl.shape[0]):
-            anchor = sample['anchor'][i].to(device)
-            positive = sample['positive'][i].to(device)
+    delta_transl = []
+    delta_rot = []
+    delta_pose = []
+    delta_quat = []
+    yaw_diff_list = []
+    for i in range(anchor_transl.shape[0]):
+        anchor = sample['anchor'][i].to(device)
+        positive = sample['positive'][i].to(device)
+        negative_i = None
+        negative_i_reflectance = None
+
+        if mode == 'triplets':
+            negative_i = sample['negative'][i].to(device)
+            negative_i_reflectance = negative_i[:, 3].clone()
+            negative_i[:, 3] = 1.
+
+        anchor_i = anchor
+        positive_i = positive
+        anchor_transl_i = anchor_transl[i]  # Aggiunta
+        anchor_rot_i = anchor_rot[i]  # Aggiunta
+        positive_transl_i = positive_transl[i]  # Aggiunta
+        positive_rot_i = positive_rot[i]  # Aggiunta
+
+        anchor_i_reflectance = anchor_i[:, 3].clone()
+        positive_i_reflectance = positive_i[:, 3].clone()
+        anchor_i[:, 3] = 1.
+        positive_i[:, 3] = 1.
+
+        rt_anchor = get_rt_matrix(anchor_transl_i, anchor_rot_i, rot_parmas='xyz')
+        rt_positive = get_rt_matrix(positive_transl_i, positive_rot_i, rot_parmas='xyz')
+
+        if exp_cfg['point_cloud_augmentation']:
+
+            rotz = np.random.rand() * 360 - 180
+            rotz = rotz * (np.pi / 180.0)
+
+            roty = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
+            rotx = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
+
+            T = torch.rand(3)*3. - 1.5
+            T[-1] = torch.rand(1)*0.5 - 0.25
+            T = T.to(device)
+
+            rt_anch_augm = get_rt_matrix(T, torch.tensor([rotx, roty, rotz]).to(device))
+            anchor_i = rt_anch_augm.inverse() @ anchor_i.T
+            anchor_i = anchor_i.T
+            anchor_i[:, 3] = anchor_i_reflectance.clone()
+
+            rotz = np.random.rand() * 360 - 180
+            rotz = rotz * (3.141592 / 180.0)
+
+            roty = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
+            rotx = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
+
+            T = torch.rand(3)*3.-1.5
+            T[-1] = torch.rand(1)*0.5 - 0.25
+            T = T.to(device)
+
+            rt_pos_augm = get_rt_matrix(T, torch.tensor([rotx, roty, rotz]).to(device))
+            positive_i = rt_pos_augm.inverse() @ positive_i.T
+            positive_i = positive_i.T
+            positive_i[:, 3] = positive_i_reflectance.clone()
+
+            rt_anch_concat = rt_anchor @ rt_anch_augm
+            rt_pos_concat = rt_positive @ rt_pos_augm
+
             if mode == 'triplets':
-                negative = sample['negative'][i].to(device)
-
-            if exp_cfg['3D_net'] != 'PVRCNN':
-                anchor_set = furthest_point_sample(anchor[:, 0:3].unsqueeze(0).contiguous(), exp_cfg['num_points'])
-                positive_set = furthest_point_sample(positive[:, 0:3].unsqueeze(0).contiguous(), exp_cfg['num_points'])
-                a = anchor_set[0, :].long()
-                p = positive_set[0, :].long()
-                anchor_i = anchor[a].clone()
-                positive_i = positive[p].clone()
-                del anchor, positive
-                if mode == 'triplets':
-                    negative_set = furthest_point_sample(negative[:, 0:3].unsqueeze(0).contiguous(), exp_cfg['num_points'])
-                    n = negative_set[0, :].long()
-                    negative_i = negative[n].clone()
-                    del negative
-            else:
-                anchor_i = anchor
-                positive_i = positive
-                if mode == 'triplets':
-                    negative_i = negative
-            # n = negative_set[i, :].long()
-            anchor_transl_i = anchor_transl[i]  # Aggiunta
-            anchor_rot_i = anchor_rot[i]  # Aggiunta
-            positive_transl_i = positive_transl[i]  # Aggiunta
-            positive_rot_i = positive_rot[i]  # Aggiunta
-
-            anchor_i_reflectance = anchor_i[:, 3].clone()
-            positive_i_reflectance = positive_i[:, 3].clone()
-            anchor_i[:, 3] = 1.
-            positive_i[:, 3] = 1.
-            if mode == 'triplets':
-                negative_i_reflectance = negative_i[:, 3].clone()
-                negative_i[:, 3] = 1.
-
-            # anchor_test = anchor_i.detach().clone()  # Test
-            # positive_test = positive_i.detach().clone()  # Test
-
-            rt_anchor = get_rt_matrix(anchor_transl_i, anchor_rot_i, rot_parmas='xyz')
-            rt_positive = get_rt_matrix(positive_transl_i, positive_rot_i, rot_parmas='xyz')
-
-            if exp_cfg['point_cloud_augmentation']:
-
-                rotz = np.random.rand() * 360 - 180
-                rotz = rotz * (np.pi / 180.0)
-
-                roty = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
-                rotx = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
-
-                T = torch.rand(3)*3. - 1.5
-                T[-1] = torch.rand(1)*0.5 - 0.25
-                T = T.to(device)
-
-                rt_anch_augm = get_rt_matrix(T, torch.tensor([rotx, roty, rotz]).to(device))
-                anchor_i = rt_anch_augm.inverse() @ anchor_i.T
-                anchor_i = anchor_i.T
-                anchor_i[:, 3] = anchor_i_reflectance.clone()
-
                 rotz = np.random.rand() * 360 - 180
                 rotz = rotz * (3.141592 / 180.0)
 
@@ -176,45 +171,134 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                 T = torch.rand(3)*3.-1.5
                 T[-1] = torch.rand(1)*0.5 - 0.25
                 T = T.to(device)
+                rt_neg_augm = get_rt_matrix(T, torch.tensor([rotx, roty, rotz]).to(device))
+                negative_i = rt_neg_augm.inverse() @ negative_i.T
+                negative_i = negative_i.T
+                negative_i[:, 3] = negative_i_reflectance.clone()
 
-                rt_pos_augm = get_rt_matrix(T, torch.tensor([rotx, roty, rotz]).to(device))
-                positive_i = rt_pos_augm.inverse() @ positive_i.T
-                positive_i = positive_i.T
-                positive_i[:, 3] = positive_i_reflectance.clone()
+            rt_anchor2positive = rt_anch_concat.inverse() @ rt_pos_concat
+            ext = mat2xyzrpy(rt_anchor2positive)
+            delta_transl_i = ext[0:3]
+            delta_rot_i = ext[3:]
 
-                rt_anch_concat = rt_anchor @ rt_anch_augm
-                rt_pos_concat = rt_positive @ rt_pos_augm
+        else:
+            raise NotImplementedError()
 
-                if mode == 'triplets':
-                    rotz = np.random.rand() * 360 - 180
-                    rotz = rotz * (3.141592 / 180.0)
+        if exp_cfg['3D_net'] != 'PVRCNN':
+            anchor_list.append(anchor_i[:, :3].unsqueeze(0))
+            positive_list.append(positive_i[:, :3].unsqueeze(0))
+            if mode == 'triplets':
+                negative_list.append(negative_i[:, :3].unsqueeze(0))
+        else:
+            if exp_cfg['use_semantic'] or exp_cfg['use_panoptic']:
+                anchor_i = torch.cat((anchor_i, sample['anchor_logits'][i].to(device)), dim=1)
+                positive_i = torch.cat((positive_i, sample['positive_logits'][i].to(device)), dim=1)
+            anchor_list.append(model.module.backbone.prepare_input(anchor_i))
+            positive_list.append(model.module.backbone.prepare_input(positive_i))
+            del anchor_i, positive_i
+            if mode == 'triplets':
+                if exp_cfg['use_semantic'] or exp_cfg['use_panoptic']:
+                    negative_i = torch.cat((negative_i, sample['negative_logits'][i].to(device)), dim=1)
+                negative_list.append(model.module.backbone.prepare_input(negative_i))
+                del negative_i
+        delta_transl.append(delta_transl_i.unsqueeze(0))
+        delta_rot.append(delta_rot_i.unsqueeze(0))
+        delta_pose.append(rt_anchor2positive.unsqueeze(0))
+        delta_quat.append(quaternion_from_matrix(rt_anchor2positive).unsqueeze(0))
 
-                    roty = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
-                    rotx = (np.random.rand() * 6 - 3) * (np.pi / 180.0)
-
-                    T = torch.rand(3)*3.-1.5
-                    T[-1] = torch.rand(1)*0.5 - 0.25
-                    T = T.to(device)
-                    rt_neg_augm = get_rt_matrix(T, torch.tensor([rotx, roty, rotz]).to(device))
-                    negative_i = rt_neg_augm.inverse() @ negative_i.T
-                    negative_i = negative_i.T
-                    negative_i[:, 3] = negative_i_reflectance.clone()
-
-                rt_anchor2positive = rt_anch_concat.inverse() @ rt_pos_concat
-                ext = mat2xyzrpy(rt_anchor2positive)
-                delta_transl_i = ext[0:3]
-                delta_rot_i = ext[3:]
-
-            else:
-                raise NotImplementedError()
+    delta_transl = torch.cat(delta_transl)
+    delta_rot = torch.cat(delta_rot)
+    delta_pose = torch.cat(delta_pose)
+    delta_quat = torch.cat(delta_quat)
 
 
-            # negative_i = negative[i, n, 0:3].unsqueeze(0)
+    if mode == 'pairs':
+        model_in = KittiDataset.collate_batch(anchor_list + positive_list)
+    elif mode == 'triplets':
+        model_in = KittiDataset.collate_batch(anchor_list + positive_list + negative_list)
+    for key, val in model_in.items():
+        if not isinstance(val, np.ndarray):
+            continue
+        model_in[key] = torch.from_numpy(val).float().to(device)
+
+    move_from_sample_to_model_in(exp_cfg, sample, model_in)
+
+    metric_head = exp_cfg['weight_transl'] != 0 or exp_cfg['weight_rot'] != 0
+    compute_transl = not exp_cfg['weight_transl'] == 0
+    compute_rotation = exp_cfg['weight_rot'] != 0
+    compute_embeddings = exp_cfg['weight_metric_learning'] != 0
+
+    batch_dict = model(model_in, metric_head, compute_embeddings,
+                       compute_transl, compute_rotation, mode=mode)
+
+    # Add the stuff that is missing in the batch dict for the Loss function
+    batch_dict["neg_mask"] = neg_mask
+    batch_dict["delta_transl"] = delta_transl
+    batch_dict["delta_rot"] = delta_rot
+    batch_dict["delta_quat"] = delta_quat
+    batch_dict["delta_pose"] = delta_pose
+    if exp_cfg["load_semantic"] or exp_cfg["load_panoptic"]:
+        batch_dict["class_one_hot_map"] = sample["class_one_hot_map"]
+        batch_dict["superclass_one_hot_map"] = sample["superclass_one_hot_map"]
+
+    total_loss, sub_losses = loss_fn(batch_dict)
+    loss_rot = sub_losses.pop("Loss: Rotation", torch.tensor([0.], device=device))
+    loss_transl = sub_losses.pop("Loss: Translation", torch.tensor([0.], device=device))
+
+    if torch.any(torch.isnan(total_loss)):
+        raise NaNLossError("Total Loss has NAN")
+
+    if 'TZMGrad' not in exp_cfg['loss_type']:
+        total_loss.backward()
+    else:
+        raise NotImplementedError("TZMGrad not implemented in DDP")
+    optimizer.step()
+
+    return total_loss, loss_rot, loss_transl, sub_losses
+
+
+def test(model, sample, exp_cfg, device):
+    model.eval()
+
+    if exp_cfg["training_type"] != "3D":
+        raise TypeError(f"Invalid training_type {exp_cfg['training_type']}. Only '3D' supported.")
+
+    if exp_cfg["3D_net"] != "PVRCNN":
+        raise TypeError(f"Invalid 3D_net {exp_cfg['3D_net']}. Only 'PVRCNN' supported.")
+
+    with torch.no_grad():
+        anchor_transl = sample['anchor_pose'].to(device)
+        positive_transl = sample['positive_pose'].to(device)
+        anchor_rot = sample['anchor_rot'].to(device)
+        positive_rot = sample['positive_rot'].to(device)
+
+        anchor_list = []
+        positive_list = []
+        delta_transl_list = []
+        delta_rot_list = []
+        delta_pose_list = []
+        for i in range(anchor_transl.shape[0]):
+            anchor_i = sample['anchor'][i].to(device)
+            positive_i = sample['positive'][i].to(device)
+
+            anchor_transl_i = anchor_transl[i]  # Aggiunta
+            anchor_rot_i = anchor_rot[i]  # Aggiunta
+            positive_transl_i = positive_transl[i]  # Aggiunta
+            positive_rot_i = positive_rot[i]  # Aggiunta
+
+            rt_anchor = get_rt_matrix(anchor_transl_i, anchor_rot_i, rot_parmas='xyz')
+            rt_positive = get_rt_matrix(positive_transl_i, positive_rot_i, rot_parmas='xyz')
+            rt_anchor2positive = rt_anchor.inverse() @ rt_positive
+            ext = mat2xyzrpy(rt_anchor2positive)
+            delta_transl_i = ext[0:3]
+            delta_rot_i = ext[3:]
+            delta_transl_list.append(delta_transl_i.unsqueeze(0))
+            delta_rot_list.append(delta_rot_i.unsqueeze(0))
+            delta_pose_list.append(rt_anchor2positive.unsqueeze(0))
+
             if exp_cfg['3D_net'] != 'PVRCNN':
                 anchor_list.append(anchor_i[:, :3].unsqueeze(0))
                 positive_list.append(positive_i[:, :3].unsqueeze(0))
-                if mode == 'triplets':
-                    negative_list.append(negative_i[:, :3].unsqueeze(0))
             else:
                 if exp_cfg['use_semantic'] or exp_cfg['use_panoptic']:
                     anchor_i = torch.cat((anchor_i, sample['anchor_logits'][i].to(device)), dim=1)
@@ -222,217 +306,67 @@ def train(model, optimizer, sample, loss_fn, exp_cfg, device, mode='pairs'):
                 anchor_list.append(model.module.backbone.prepare_input(anchor_i))
                 positive_list.append(model.module.backbone.prepare_input(positive_i))
                 del anchor_i, positive_i
-                if mode == 'triplets':
-                    if exp_cfg['use_semantic'] or exp_cfg['use_panoptic']:
-                        negative_i = torch.cat((negative_i, sample['negative_logits'][i].to(device)), dim=1)
-                    negative_list.append(model.module.backbone.prepare_input(negative_i))
-                    del negative_i
-            delta_transl.append(delta_transl_i.unsqueeze(0))
-            delta_rot.append(delta_rot_i.unsqueeze(0))
-            delta_pose.append(rt_anchor2positive.unsqueeze(0))
-            delta_quat.append(quaternion_from_matrix(rt_anchor2positive).unsqueeze(0))
 
-        delta_transl = torch.cat(delta_transl)
-        delta_rot = torch.cat(delta_rot)
-        delta_pose = torch.cat(delta_pose)
-        delta_quat = torch.cat(delta_quat)
+        delta_transl = torch.cat(delta_transl_list)
+        delta_rot = torch.cat(delta_rot_list)
+        delta_pose_list = torch.cat(delta_pose_list)
 
-        if exp_cfg['3D_net'] != 'PVRCNN':
-            anchor = torch.cat(anchor_list)
-            positive = torch.cat(positive_list)
-            model_in = torch.cat((anchor, positive))
-            if mode == 'triplets':
-                negative = torch.cat(negative_list)
-                model_in = torch.cat((anchor, positive, negative))
-            if exp_cfg['3D_net'] == 'RandLANet':
-                model_in = prepare_randlanet_input(ConfigSemanticKITTI2(), model_in.cpu(), device)
-            # Normalize between [-1, 1], more or less
-            # model_in = model_in / 100.
-        else:
-            if mode == 'pairs':
-                model_in = KittiDataset.collate_batch(anchor_list + positive_list)
-            elif mode == 'triplets':
-                model_in = KittiDataset.collate_batch(anchor_list + positive_list + negative_list)
-            for key, val in model_in.items():
-                if not isinstance(val, np.ndarray):
-                    continue
-                model_in[key] = torch.from_numpy(val).float().to(device)
+        model_in = KittiDataset.collate_batch(anchor_list + positive_list)
+        for key, val in model_in.items():
+            if not isinstance(val, np.ndarray):
+                continue
+            model_in[key] = torch.from_numpy(val).float().to(device)
 
         move_from_sample_to_model_in(exp_cfg, sample, model_in)
 
-        metric_head = exp_cfg['weight_transl'] != 0 or exp_cfg['weight_rot'] != 0
-        compute_transl = not exp_cfg['weight_transl'] == 0
-        compute_rotation = exp_cfg['weight_rot'] != 0
-        compute_embeddings = exp_cfg['weight_metric_learning'] != 0
-
-        batch_dict = model(model_in, metric_head, compute_embeddings,
-                           compute_transl, compute_rotation, mode=mode)
-
-        # Add the stuff that is missing in the batch dict for the Loss function
-        batch_dict["neg_mask"] = neg_mask
-        batch_dict["delta_transl"] = delta_transl
-        batch_dict["delta_rot"] = delta_rot
-        batch_dict["delta_quat"] = delta_quat
-        batch_dict["delta_pose"] = delta_pose
-        if exp_cfg["load_semantic"] or exp_cfg["load_panoptic"]:
-            batch_dict["class_one_hot_map"] = sample["class_one_hot_map"]
-            batch_dict["superclass_one_hot_map"] = sample["superclass_one_hot_map"]
-
-        total_loss, sub_losses = loss_fn(batch_dict)
-        loss_rot = sub_losses.pop("Loss: Rotation", torch.tensor([0.], device=device))
-        loss_transl = sub_losses.pop("Loss: Translation", torch.tensor([0.], device=device))
-
-        if torch.any(torch.isnan(total_loss)):
-            raise NaNLossError("Total Loss has NAN")
-
-        if 'TZMGrad' not in exp_cfg['loss_type']:
-            total_loss.backward()
+        batch_dict = model(model_in, metric_head=True)
+        anchor_out = batch_dict['out_embedding']
+        transl = batch_dict['out_translation']
+        yaw = batch_dict['out_rotation']
+        transl_diff = delta_transl
+        if exp_cfg['weight_transl'] > 0. and transl is not None:
+            gt_pred_diff = transl_diff - transl
+            transl_comps_error = gt_pred_diff.norm(dim=1).mean()
         else:
-            raise NotImplementedError("TZMGrad not implemented in DDP")
-        optimizer.step()
+            transl_comps_error = torch.tensor([0.], device=device)
 
-        return total_loss, loss_rot, loss_transl, sub_losses
+        # Rotation Loss
+        diff_yaws = delta_rot[:, 2] % (2*np.pi)
+        if exp_cfg['rot_representation'].startswith('sincos'):
+            yaw = torch.atan2(yaw[:, 1], yaw[:, 0])
+        elif exp_cfg['rot_representation'] == 'yaw':
+            yaw = yaw[0]
+        elif exp_cfg['rot_representation'].startswith('ce'):
+            token = exp_cfg['rot_representation'].split('_')
+            num_classes = int(token[1])
+            bin_size = 2*np.pi / num_classes
+            yaw_bin = yaw[:, :-1]
+            yaw_delta = yaw[:, -1]
+            yaw_bin = torch.argmax(yaw_bin, dim=1)
+            yaw_bin = yaw_bin * bin_size
+            yaw = yaw_bin + yaw_delta
+        elif exp_cfg['rot_representation'] == 'quat':
+            yaw = F.normalize(yaw, dim=1)
+            final_yaws = torch.zeros(yaw.shape[0], device=yaw.device, dtype=yaw.dtype)
+            for i in range(yaw.shape[0]):
+                final_yaws[i] = mat2xyzrpy(quat2mat(yaw[i]))[-1]
+            yaw = final_yaws
+        elif exp_cfg['rot_representation'] == '6dof':
+            transformation = batch_dict['transformation']
+            homogeneous = torch.tensor([0., 0., 0., 1.]).repeat(transformation.shape[0], 1, 1).to(transformation.device)
+            transformation = torch.cat((transformation, homogeneous), dim=1)
+            transformation = transformation.inverse()
+            final_yaws = torch.zeros(transformation.shape[0], device=transformation.device,
+                                     dtype=transformation.dtype)
+            for i in range(transformation.shape[0]):
+                final_yaws[i] = mat2xyzrpy(transformation[i])[-1]
+            yaw = final_yaws
+            transl_comps_error = (transformation[:,:3,3] - delta_pose_list[:,:3,3]).norm(dim=1).mean()
 
-
-def test(model, sample, exp_cfg, device):
-    model.eval()
-    margin = exp_cfg['margin']
-
-    with torch.no_grad():
-        if exp_cfg['training_type'] == "3D":
-            anchor_transl = sample['anchor_pose'].to(device)
-            positive_transl = sample['positive_pose'].to(device)
-            anchor_rot = sample['anchor_rot'].to(device)
-            positive_rot = sample['positive_rot'].to(device)
-
-            anchor_list = []
-            positive_list = []
-            delta_transl_list = []
-            delta_rot_list = []
-            delta_pose_list = []
-            for i in range(anchor_transl.shape[0]):
-                anchor = sample['anchor'][i].to(device)
-                positive = sample['positive'][i].to(device)
-
-                if exp_cfg['3D_net'] != 'PVRCNN':
-                    anchor_set = furthest_point_sample(anchor[:, 0:3].unsqueeze(0).contiguous(), exp_cfg['num_points'])
-                    positive_set = furthest_point_sample(positive[:, 0:3].unsqueeze(0).contiguous(), exp_cfg['num_points'])
-                    a = anchor_set[0, :].long()
-                    p = positive_set[0, :].long()
-                    anchor_i = anchor[a]
-                    positive_i = positive[p]
-                else:
-                    anchor_i = anchor
-                    positive_i = positive
-
-                anchor_transl_i = anchor_transl[i]  # Aggiunta
-                anchor_rot_i = anchor_rot[i]  # Aggiunta
-                positive_transl_i = positive_transl[i]  # Aggiunta
-                positive_rot_i = positive_rot[i]  # Aggiunta
-
-                rt_anchor = get_rt_matrix(anchor_transl_i, anchor_rot_i, rot_parmas='xyz')
-                rt_positive = get_rt_matrix(positive_transl_i, positive_rot_i, rot_parmas='xyz')
-                rt_anchor2positive = rt_anchor.inverse() @ rt_positive
-                ext = mat2xyzrpy(rt_anchor2positive)
-                delta_transl_i = ext[0:3]
-                delta_rot_i = ext[3:]
-                delta_transl_list.append(delta_transl_i.unsqueeze(0))
-                delta_rot_list.append(delta_rot_i.unsqueeze(0))
-                delta_pose_list.append(rt_anchor2positive.unsqueeze(0))
-
-                if exp_cfg['3D_net'] != 'PVRCNN':
-                    anchor_list.append(anchor_i[:, :3].unsqueeze(0))
-                    positive_list.append(positive_i[:, :3].unsqueeze(0))
-                else:
-                    if exp_cfg['use_semantic'] or exp_cfg['use_panoptic']:
-                        anchor_i = torch.cat((anchor_i, sample['anchor_logits'][i].to(device)), dim=1)
-                        positive_i = torch.cat((positive_i, sample['positive_logits'][i].to(device)), dim=1)
-                    anchor_list.append(model.module.backbone.prepare_input(anchor_i))
-                    positive_list.append(model.module.backbone.prepare_input(positive_i))
-                    del anchor_i, positive_i
-
-            delta_transl = torch.cat(delta_transl_list)
-            delta_rot = torch.cat(delta_rot_list)
-            delta_pose_list = torch.cat(delta_pose_list)
-
-            if exp_cfg['3D_net'] != 'PVRCNN':
-                anchor = torch.cat(anchor_list)
-                positive = torch.cat(positive_list)
-                model_in = torch.cat((anchor, positive))
-                if exp_cfg['3D_net'] == 'RandLANet':
-                    model_in = prepare_randlanet_input(ConfigSemanticKITTI2(), model_in.cpu(), device)
-                # Normalize between [-1, 1], more or less
-                # model_in = model_in / 100.
-            else:
-                model_in = KittiDataset.collate_batch(anchor_list + positive_list)
-                for key, val in model_in.items():
-                    if not isinstance(val, np.ndarray):
-                        continue
-                    model_in[key] = torch.from_numpy(val).float().to(device)
-
-            move_from_sample_to_model_in(exp_cfg, sample, model_in)
-
-            batch_dict = model(model_in, metric_head=True)
-            anchor_out = batch_dict['out_embedding']
-            transl = batch_dict['out_translation']
-            yaw = batch_dict['out_rotation']
-            # transl_diff = anchor_transl - positive_transl
-            transl_diff = delta_transl
-            if exp_cfg['weight_transl'] > 0. and transl is not None:
-                gt_pred_diff = transl_diff - transl
-                transl_comps_error = gt_pred_diff.norm(dim=1).mean()
-            else:
-                transl_comps_error = torch.tensor([0.], device=device)
-
-            # Rotation Loss
-            # anchor_yaws = anchor_rot[:, 0]
-            # positive_yaws = positive_rot[:, 0]
-            diff_yaws = delta_rot[:, 2] % (2*np.pi)
-            if exp_cfg['rot_representation'].startswith('sincos'):
-                yaw = torch.atan2(yaw[:, 1], yaw[:, 0])
-            elif exp_cfg['rot_representation'] == 'yaw':
-                yaw = yaw[0]
-            elif exp_cfg['rot_representation'].startswith('ce'):
-                token = exp_cfg['rot_representation'].split('_')
-                num_classes = int(token[1])
-                bin_size = 2*np.pi / num_classes
-                yaw_bin = yaw[:, :-1]
-                yaw_delta = yaw[:, -1]
-                yaw_bin = torch.argmax(yaw_bin, dim=1)
-                yaw_bin = yaw_bin * bin_size
-                yaw = yaw_bin + yaw_delta
-            elif exp_cfg['rot_representation'] == 'quat':
-                yaw = F.normalize(yaw, dim=1)
-                final_yaws = torch.zeros(yaw.shape[0], device=yaw.device, dtype=yaw.dtype)
-                for i in range(yaw.shape[0]):
-                    final_yaws[i] = mat2xyzrpy(quat2mat(yaw[i]))[-1]
-                yaw = final_yaws
-            elif exp_cfg['rot_representation'] == 'bingham':
-                to_quat = QuadQuatFastSolver()
-                quat_out = to_quat.apply(yaw)[:, [1,2,3,0]]
-                final_yaws = torch.zeros(yaw.shape[0], device=yaw.device, dtype=yaw.dtype)
-                for i in range(yaw.shape[0]):
-                    final_yaws[i] = mat2xyzrpy(quat2mat(quat_out[i]))[-1]
-                yaw = final_yaws
-            elif exp_cfg['rot_representation'] == '6dof':
-                transformation = batch_dict['transformation']
-                homogeneous = torch.tensor([0., 0., 0., 1.]).repeat(transformation.shape[0], 1, 1).to(transformation.device)
-                transformation = torch.cat((transformation, homogeneous), dim=1)
-                transformation = transformation.inverse()
-                final_yaws = torch.zeros(transformation.shape[0], device=transformation.device,
-                                         dtype=transformation.dtype)
-                for i in range(transformation.shape[0]):
-                    final_yaws[i] = mat2xyzrpy(transformation[i])[-1]
-                yaw = final_yaws
-                transl_comps_error = (transformation[:,:3,3] - delta_pose_list[:,:3,3]).norm(dim=1).mean()
-
-            yaw = yaw % (2*np.pi)
-            yaw_error_deg = torch.abs(diff_yaws - yaw)
-            yaw_error_deg[yaw_error_deg>np.pi] = 2*np.pi - yaw_error_deg[yaw_error_deg>np.pi]
-            yaw_error_deg = yaw_error_deg.mean() * 180 / np.pi
-
-        else:
-            anchor_out = model(sample['anchor'].to(device), metric_head=False)
+        yaw = yaw % (2*np.pi)
+        yaw_error_deg = torch.abs(diff_yaws - yaw)
+        yaw_error_deg[yaw_error_deg>np.pi] = 2*np.pi - yaw_error_deg[yaw_error_deg>np.pi]
+        yaw_error_deg = yaw_error_deg.mean() * 180 / np.pi
 
     if exp_cfg['norm_embeddings']:
         anchor_out = anchor_out / anchor_out.norm(dim=1, keepdim=True)
@@ -442,47 +376,31 @@ def test(model, sample, exp_cfg, device):
 
 def get_database_embs(model, sample, exp_cfg, device):
     model.eval()
-    margin = exp_cfg['margin']
+
+    if exp_cfg["training_type"] != "3D":
+        raise TypeError(f"Invalid training_type {exp_cfg['training_type']}. Only '3D' supported.")
+
+    if exp_cfg["3D_net"] != "PVRCNN":
+        raise TypeError(f"Invalid 3D_net {exp_cfg['3D_net']}. Only 'PVRCNN' supported.")
 
     with torch.no_grad():
-        if exp_cfg['training_type'] == "3D":
-            anchor_list = []
-            for i in range(len(sample['anchor'])):
-                anchor = sample['anchor'][i].to(device)
+        anchor_list = []
+        for i in range(len(sample['anchor'])):
+            anchor_i = sample['anchor'][i].to(device)
 
-                if exp_cfg['3D_net'] != 'PVRCNN':
-                    anchor_set = furthest_point_sample(anchor[:, 0:3].unsqueeze(0).contiguous(), exp_cfg['num_points'])
-                    a = anchor_set[0, :].long()
-                    anchor_i = anchor[a]
-                else:
-                    anchor_i = anchor
+            if exp_cfg['use_semantic'] or exp_cfg['use_panoptic']:
+                anchor_i = torch.cat((anchor_i, sample['anchor_logits'][i].to(device)), dim=1)
+            anchor_list.append(model.module.backbone.prepare_input(anchor_i))
+            del anchor_i
 
-                if exp_cfg['3D_net'] != 'PVRCNN':
-                    anchor_list.append(anchor_i[:, :3].unsqueeze(0))
-                else:
-                    if exp_cfg['use_semantic'] or exp_cfg['use_panoptic']:
-                        anchor_i = torch.cat((anchor_i, sample['anchor_logits'][i].to(device)), dim=1)
-                    anchor_list.append(model.module.backbone.prepare_input(anchor_i))
-                    del anchor_i
+        model_in = KittiDataset.collate_batch(anchor_list)
+        for key, val in model_in.items():
+            if not isinstance(val, np.ndarray):
+                continue
+            model_in[key] = torch.from_numpy(val).float().to(device)
 
-            if exp_cfg['3D_net'] != 'PVRCNN':
-                anchor = torch.cat(tuple(anchor_list), 0)
-                model_in = anchor
-                if exp_cfg['3D_net'] == 'RandLANet':
-                    model_in = prepare_randlanet_input(ConfigSemanticKITTI2(), model_in.cpu(), device)
-                # model_in = model_in / 100.
-            else:
-                model_in = KittiDataset.collate_batch(anchor_list)
-                for key, val in model_in.items():
-                    if not isinstance(val, np.ndarray):
-                        continue
-                    model_in[key] = torch.from_numpy(val).float().to(device)
-
-            batch_dict = model(model_in, metric_head=False)
-            anchor_out = batch_dict['out_embedding']
-
-        else:
-            anchor_out = model(sample['anchor'].to(device), metric_head=False)
+        batch_dict = model(model_in, metric_head=False)
+        anchor_out = batch_dict['out_embedding']
 
     if exp_cfg['norm_embeddings']:
         anchor_out = anchor_out / anchor_out.norm(dim=1, keepdim=True)
@@ -506,11 +424,6 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     torch.cuda.set_device(gpu)
     device = torch.device(gpu)
     print(f"Process {rank}, seed {common_seed}")
-
-    # t = torch.rand(1).to(device)
-    # gather_t = [torch.ones_like(t) for _ in range(dist.get_world_size())]
-    # dist.all_gather(gather_t, t)
-    # print(rank, t, gather_t)
 
     current_date = datetime.now()
 
@@ -660,12 +573,6 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                                              use_panoptic=load_panoptic,
                                              use_logits=use_logits, without_ground=exp_cfg['without_ground'],
                                              loop_file=exp_cfg['loop_file'])
-    elif args.dataset == 'nclt':
-        training_dataset = NCLTDatasetTriplets(args.data, '2012-01-08', '2012-01-15', 'loops_on_2012-01-08.pickle')
-        validation_dataset = NCLTDatasetPairs(args.data, '2012-12-01', '2012-12-01', 'loop_GT.pickle')
-        dataset_for_recall = NCLTDataset(os.path.join(args.data, '2012-12-01'), 'loop_GT.pickle')
-        exp_cfg['PC_RANGE'] = [-70.4, -70.4, -0.5, 70.4, 70.4, 3.5]
-
 
     dataset_list_valid = [dataset_for_recall]
 
@@ -745,7 +652,7 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
             if not os.path.exists(final_dest):
                 os.mkdir(final_dest)
             wandb.save(f'{final_dest}/best_model_so_far.tar', base_path=final_dest)
-            #copy2('wandb_config.yaml', f'{final_dest}/wandb_config.yaml')
+
             with open(f'{final_dest}/wandb_config.yaml', "w") as wandb_cfg_file:
                 yaml.dump({'experiment': exp_cfg}, wandb_cfg_file)
             wandb.save(f'{final_dest}/wandb_config.yaml', base_path=final_dest)
@@ -771,7 +678,6 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
 
         loaded_keys = [p for p in model.state_dict().keys()
                          if p not in missing_keys and p not in unexpected_keys]
-        # loaded_params = [p for p in model_params if p in loaded_keys]
 
         if rank == 0:
             if loaded_keys:
@@ -809,19 +715,12 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
             print("\n\nFrozen Parameters: " + str(len(frozen_params)))
             print(" - " + "\n - ".join(frozen_params))
 
-    # if torch.cuda.device_count() > 1:
-    #     model = torch.nn.DataParallel(model)
-    # checkpoint = torch.load('checkpoint_3_0.053.tar')
-    # model.load_state_dict(checkpoint['state_dict'])
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model.train()
     # Only use for debugging, otherwise it can slow down things
     # model = DistributedDataParallel(model.to(device), device_ids=[rank], output_device=rank,
     #                                 find_unused_parameters=True)
     model = DistributedDataParallel(model.to(device), device_ids=[rank], output_device=rank)
-    # if args.wandb and rank == 0:
-    #     wandb.watch(model)
-    # print('Number of model parameters: {}'.format(sum([p.data.nelement() for p in model.parameters()])))
 
     start_full_time = time.time()
 
@@ -849,14 +748,9 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
         swa_start = 110
         swa_scheduler = SWALR(optimizer, swa_lr=exp_cfg['learning_rate']*0.5, anneal_epochs=5)
 
-    min_test_loss = None
     best_rot_error = 1000
     max_recall = 0.
     max_auc = 0.
-    best_model = {}
-    best_model_loss = {}
-    savefilename_loss = ''
-    savefilename = ''
     old_saved_file = None
     old_saved_file_recall = None
     old_saved_file_auc = None
@@ -865,19 +759,8 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
     torch.random.manual_seed(local_seed)
 
     for epoch in range(starting_epoch, exp_cfg['epochs'] + 1):
-        # if epoch == starting_epoch+1:
-        #     break
         dist.barrier()
 
-        if epoch == 50 and exp_cfg['mode'] == 'triplets' and exp_cfg['hard_mining'] and args.dataset == 'nclt':
-            training_dataset = NCLTDatasetTriplets(args.data, '2012-01-08', '2012-01-15',
-                                                   'loops_on_2012-01-08.pickle', hard_negative=True)
-            train_sampler = torch.utils.data.distributed.DistributedSampler(
-                training_dataset,
-                num_replicas=world_size,
-                rank=rank,
-                seed=common_seed
-            )
         if epoch == 50 and exp_cfg['hard_mining'] and args.dataset == 'kitti':
             print("Switching to hard triplet mining")
             training_dataset, dataset_list_train = datasets_concat_kitti_triplets(args.data,
@@ -958,20 +841,13 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
             # "Loss: Meta-Semantic Mismatch": "loss_mse",
         }
         other_local_loss = {}
-        store_data = False
 
         if rank == 0:
             print('\nTraining')
             print("="*40 + "\n")
+
         ## Training ##
         for batch_idx, sample in enumerate(TrainLoader):
-            # break
-            # if batch_idx==3:
-            #     break
-
-            # Test to see if memory increases due to variability in PointCloud sizes by skipping some batches
-            #if batch_idx < 100:
-            #    continue
 
             start_time = time.time()
             skipped_batches = torch.zeros(1).to(device)
@@ -987,8 +863,6 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                 loss_transl = torch.zeros(1).to(device)
                 other_losses = {}
                 skipped_batches[0] = 1
-                #dist.barrier()
-                #continue
 
             if exp_cfg['scheduler'] == 'onecycle':
                 scheduler.step()
@@ -999,11 +873,9 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
             dist.reduce(loss_transl, 0)
             dist.reduce(skipped_batches, 0)
 
-            #other_reduced_losses = {}
             if other_losses:
                 for v in other_losses.values():
                     dist.reduce(v, 0)
-                #other_reduced_losses = {k: dist.reduce(v, 0) for k, v in other_losses.items()}
 
             batch_world_size = world_size - skipped_batches[0]
 
@@ -1035,7 +907,6 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                         other_local_loss[k] += tmp_other_local_loss
                     else:
                         other_local_loss[k] = tmp_other_local_loss
-
 
                 if batch_idx % args.print_iteration == 0 and batch_idx != 0:
                     other_loss_sum = ""
@@ -1071,8 +942,6 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
             print('Total epoch time = %.2f' % (time.time() - epoch_start_time))
             print("------------------------------------\n")
 
-        total_test_loss = 0.
-        local_loss = 0.0
         local_iter = 0.
         transl_error_sum = 0
         yaw_error_sum = 0
@@ -1085,9 +954,6 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
 
         if exp_cfg['weight_rot'] > 0. or exp_cfg['weight_transl'] > 0.:
             for batch_idx, sample in enumerate(TestLoader):
-                # break
-                # if batch_idx == 3:
-                #     break
                 start_time = time.time()
                 _, transl_error, yaw_error = test(model, sample, exp_cfg, device)
                 dist.barrier()
@@ -1105,7 +971,6 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                                                                     time.time() - start_time))
                         local_iter = 0.
 
-
         if exp_cfg['weight_metric_learning'] > 0.:
             if rank == 0:
                 print('\nEvaluating with embeddings')
@@ -1115,11 +980,8 @@ def main_process(gpu, exp_cfg, common_seed, world_size, args):
                 emb = get_database_embs(model, sample, exp_cfg, device)
                 dist.barrier()
                 out_emb = [torch.zeros_like(emb) for _ in range(world_size)]
-                # print(f'{rank} {emb}')
                 dist.all_gather(out_emb, emb)
-                # print(f'{rank} {out_emb}')
-                # if rank != 0:
-                #     dist.gather(emb)
+
                 if rank == 0:
                     interleaved_out = torch.empty((emb.shape[0]*world_size, emb.shape[1]),
                                                   device=emb.device, dtype=emb.dtype)
@@ -1327,10 +1189,6 @@ if __name__ == '__main__':
 
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = args.port
-
-    # if args.device is not None and not args.no_cuda:
-    #     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    #     os.environ["CUDA_VISIBLE_DEVICES"] = args.device
 
     args.freeze_weights_containing = list(filter(None, args.freeze_weights_containing.split(",")))
     args.unfreeze_weights_containing = list(filter(None, args.unfreeze_weights_containing.split(",")))

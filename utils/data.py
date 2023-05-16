@@ -5,8 +5,6 @@ import torch
 from torch.utils.data.dataloader import default_collate
 
 from datasets.KITTI360Dataset import KITTI3603DDictPairs, KITTI3603DDictTriplets
-from datasets.KITTI_DGR import KITTIDGR3DDictPairs
-from datasets.KITTI_RPMNet import KITTIRPM3DDictPairs
 from datasets.KITTI_data_loader import KITTILoader3DDictPairs, KITTILoader3DDictTriplets
 import torch.utils.data
 
@@ -83,35 +81,6 @@ def datasets_concat_kitti360_triplets(data_dir, sequences_list, transforms, data
 
     dataset = torch.utils.data.ConcatDataset(dataset_list)
     return dataset, dataset_list
-
-
-def datasets_concat_kitti_rpmnet(data_dir, sequences_list, points_num, device, **kwargs):
-
-    dataset_list = []
-
-    for sequence in sequences_list:
-        poses_file = data_dir + "/sequences/" + sequence + "/poses_SEMANTICKITTI.txt"
-        d = KITTIRPM3DDictPairs(data_dir, sequence, poses_file, points_num, device, **kwargs)
-
-        dataset_list.append(d)
-
-    dataset = torch.utils.data.ConcatDataset(dataset_list)
-    return dataset, dataset_list
-
-
-def datasets_concat_kitti_DGR(data_dir, sequences_list, points_num, device, **kwargs):
-
-    dataset_list = []
-
-    for sequence in sequences_list:
-        poses_file = data_dir + "/sequences/" + sequence + "/poses_SEMANTICKITTI.txt"
-        d = KITTIDGR3DDictPairs(data_dir, sequence, poses_file, points_num, device, **kwargs)
-
-        dataset_list.append(d)
-
-    dataset = torch.utils.data.ConcatDataset(dataset_list)
-    return dataset, dataset_list
-
 
 
 def get_dataset3d_mean_std(dataset):

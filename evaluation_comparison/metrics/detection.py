@@ -321,7 +321,7 @@ def unflatten_pairs_file(
 
 
 if __name__ == "__main__":
-    pair_path = "/home/arceyd/Desktop/"
+    pair_path = "~/"
 
     pair_files = [
         "pair_dist_iris2_freiburg.npy",
