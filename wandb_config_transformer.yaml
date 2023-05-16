@@ -1,0 +1,57 @@
+"experiment":
+  "project": "deep_lcd"
+  "tags": null
+  "notes": null
+  "num_workers": 2
+  # TRAINING
+  "training_type" : 3D # RGB, 3D
+  "epochs" : 150
+  "batch_size" : 2
+  "learning_rate" : 0.004
+  "beta1" : 0.9
+  "beta2" : 0.999
+  "eps" : 1.e-8
+  "weight_decay" : 0.000005
+  # SCHEDULER
+  "scheduler": "multistep" # "multistep" or "onecycle" or "swa"
+  # NETWORK PARAMS 3D
+  "3D_net" : PVRCNN
+  "head" : Transformer #PointNet
+  "desc_head": NetVLAD
+  "load_semantic": False
+  "load_panoptic": False
+  "use_logits": False
+  "use_semantic": False
+  "use_panoptic": False
+  "model_norm": "batch"
+  "num_points" : 4096
+  "feature_size" : 64
+  "cluster_size" : 64
+  "shared_embeddings": True
+  "feature_output_dim_3D" : 256
+  "point_cloud_augmentation": True
+  "point_cloud_jitter": False
+  # LOSS
+  "margin": 0.5
+  "loss_type": "triplet_random"
+  "norm_embeddings": True
+  "semantic_matching_cost": False
+  "semantic_weight": 0.5 # Weight for the Semantic Class cost in the UOT algorithm's cost matrix
+  "supersem_weight": 1 # Weight for the Semantic Superclass cost in the UOT algorithm's cost matrix
+  "panoptic_weight": 2.e-7 # Weight for the Panoptic Label Mismatch loss
+  "inv_tf_weight" : 1 # Weight for the Reverse Transform Loss
+  # KITTI
+  "test_sequence": "08"
+  "without_ground" : False
+  "loop_file": "loop_GT_4m"
+  # LOSS
+  "weight_metric_learning": 1
+  "weight_rot": 1
+  "weight_transl": 0
+  "rot_representation": "6dof"  # "yaw", or "sincos", "ce_N", "quat", "bingham", "6dof"
+  "sinkhorn_iter": 5
+  "sinkhorn_aux_loss": True
+  "sinkhorn_type": "unbalanced"  # or "slack"
+  "mode": "pairs"
+  "hard_mining": False
+  "tf_dec_heads": 8
