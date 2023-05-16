@@ -1,3 +1,5 @@
+#! /usr/bin/env python
+
 import argparse
 from datasets.NCLTDataset import NCLTDataset
 import os
@@ -36,24 +38,24 @@ torch.backends.cudnn.benchmark = True
 def prepare_input(model, samples, exp_cfg, device):
     anchor_list = []
     for point_cloud in samples:
-        if exp_cfg['3D_net'] != 'PVRCNN':
-            anchor_set = furthest_point_sample(point_cloud[:, 0:3].unsqueeze(0).contiguous(), exp_cfg['num_points'])
+        if exp_cfg["3D_net"] != "PVRCNN":
+            anchor_set = furthest_point_sample(point_cloud[:, 0:3].unsqueeze(0).contiguous(), exp_cfg["num_points"])
             a = anchor_set[0, :].long()
             anchor_i = point_cloud[a]
         else:
             anchor_i = point_cloud
 
-        if exp_cfg['3D_net'] != 'PVRCNN':
+        if exp_cfg["3D_net"] != "PVRCNN":
             anchor_list.append(anchor_i[:, :3].unsqueeze(0))
         else:
             anchor_list.append(model.backbone.prepare_input(anchor_i))
             del anchor_i
 
-    if exp_cfg['3D_net'] != 'PVRCNN':
+    if exp_cfg["3D_net"] != "PVRCNN":
         point_cloud = torch.cat(tuple(anchor_list), 0)
         model_in = point_cloud
 
-        if exp_cfg['3D_net'] == 'RandLANet':
+        if exp_cfg["3D_net"] == "RandLANet":
             model_in = prepare_randlanet_input(ConfigSemanticKITTI2(), model_in.cpu(), device)
     else:
         model_in = KittiDataset.collate_batch(anchor_list)
@@ -70,14 +72,14 @@ def geometric_verification(model, dataset, id_query, id_candidate, device, exp_c
 
         sample_query = dataset.__getitem__(id_query)
         sample_candidate = dataset.__getitem__(id_candidate)
-        query_pc = sample_query['anchor'].to(device)
-        candidate_pc = sample_candidate['anchor'].to(device)
+        query_pc = sample_query["anchor"].to(device)
+        candidate_pc = sample_candidate["anchor"].to(device)
 
         model_in = prepare_input(model, [query_pc, candidate_pc], exp_cfg, device)
 
         batch_dict = model(model_in, metric_head=True, compute_embeddings=False)
 
-        transformation = batch_dict['transformation']
+        transformation = batch_dict["transformation"]
         homogeneous = torch.tensor([0., 0., 0., 1.]).repeat(transformation.shape[0], 1, 1).to(transformation.device)
         transformation = torch.cat((transformation, homogeneous), dim=1)
 
@@ -91,8 +93,8 @@ def geometric_verification(model, dataset, id_query, id_candidate, device, exp_c
 
         batch_dict = model(model_in, metric_head=False, compute_embeddings=True)
 
-        emb = batch_dict['out_embedding']
-        if exp_cfg['norm_embeddings']:
+        emb = batch_dict["out_embedding"]
+        if exp_cfg["norm_embeddings"]:
             emb = emb / emb.norm(dim=1, keepdim=True)
 
     return (emb[0] - emb[1]).norm().detach().cpu()
@@ -104,14 +106,14 @@ def geometric_verification2(model, dataset, id_query, id_candidate, device, exp_
 
         sample_query = dataset.__getitem__(id_query)
         sample_candidate = dataset.__getitem__(id_candidate)
-        query_pc = sample_query['anchor'].to(device)
-        candidate_pc = sample_candidate['anchor'].to(device)
+        query_pc = sample_query["anchor"].to(device)
+        candidate_pc = sample_candidate["anchor"].to(device)
 
         model_in = prepare_input(model, [query_pc, candidate_pc], exp_cfg, device)
 
         batch_dict = model(model_in, metric_head=True, compute_embeddings=False)
 
-    return batch_dict['transport'].sum(-1).sum().detach().cpu()
+    return batch_dict["transport"].sum(-1).sum().detach().cpu()
 
 
 class SamplePairs(Sampler):
@@ -171,21 +173,21 @@ def load_poses(
         loop_file: str,
         z_offset: float,
 ):
-    if dataset == 'kitti':
+    if dataset == "kitti":
         dataset_for_recall = KITTILoader3DPoses(data, sequence,
-                                                os.path.join(data, 'sequences', sequence, 'poses.txt'),
+                                                os.path.join(data, "sequences", sequence, "poses.txt"),
                                                 num_points, device, train=False,
                                                 use_semantic=use_semantic,
                                                 use_panoptic=use_panoptic,
                                                 without_ground=without_ground,
                                                 loop_file=loop_file)
-    elif dataset == 'kitti360':
+    elif dataset == "kitti360":
         dataset_for_recall = KITTI3603DPoses(data, sequence,
                                              train=False,
-                                             without_ground=without_ground, loop_file='loop_GT_4m_noneg')
-    elif dataset == 'freiburg':
+                                             without_ground=without_ground, loop_file="loop_GT_4m_noneg")
+    elif dataset == "freiburg":
         dataset_for_recall = FreiburgDataset(data, without_ground=without_ground, z_offset=z_offset)
-    elif dataset == 'nclt':
+    elif dataset == "nclt":
         dataset_for_recall = NCLTDataset(data, sequence)
     else:
         raise ValueError(f"Invalid dataset {dataset}.")
@@ -217,17 +219,17 @@ def do_inference(
         override_cfg["loop_file"] = loop_file
 
     if sequence is None:
-        if dataset == 'kitti':
-            override_cfg['test_sequence'] = "08"
+        if dataset == "kitti":
+            override_cfg["test_sequence"] = "08"
 
-        elif dataset == 'nclt':
-            override_cfg['test_sequence'] = "2013-04-05"
+        elif dataset == "nclt":
+            override_cfg["test_sequence"] = "2013-04-05"
 
-        elif dataset == 'kitti360':
-            override_cfg['test_sequence'] = "2013_05_28_drive_0002_sync"
+        elif dataset == "kitti360":
+            override_cfg["test_sequence"] = "2013_05_28_drive_0002_sync"
 
         if dataset != "freiburg":
-            sequences_validation = [override_cfg['test_sequence']]
+            sequences_validation = [override_cfg["test_sequence"]]
             sequence = sequences_validation[0]
 
     model, exp_cfg = load_model(weights_path, override_cfg_dict=override_cfg)
@@ -238,7 +240,7 @@ def do_inference(
                                                     exp_cfg["without_ground"], exp_cfg["loop_file"], z_offset)
 
     map_loader = torch.utils.data.DataLoader(dataset=dataset_for_recall,
-                                             batch_size=exp_cfg['batch_size'],
+                                             batch_size=exp_cfg["batch_size"],
                                              num_workers=2,
                                              shuffle=False,
                                              collate_fn=merge_inputs,
@@ -263,28 +265,28 @@ def do_inference(
         with torch.no_grad():
 
             anchor_list = []
-            for i in range(len(sample['anchor'])):
-                anchor = sample['anchor'][i].to(device)
+            for i in range(len(sample["anchor"])):
+                anchor = sample["anchor"][i].to(device)
 
-                if exp_cfg['3D_net'] != 'PVRCNN':
-                    anchor_set = furthest_point_sample(anchor[:, 0:3].unsqueeze(0).contiguous(), exp_cfg['num_points'])
+                if exp_cfg["3D_net"] != "PVRCNN":
+                    anchor_set = furthest_point_sample(anchor[:, 0:3].unsqueeze(0).contiguous(), exp_cfg["num_points"])
                     a = anchor_set[0, :].long()
                     anchor_i = anchor[a]
                 else:
                     anchor_i = anchor
 
-                if exp_cfg['3D_net'] != 'PVRCNN':
+                if exp_cfg["3D_net"] != "PVRCNN":
                     anchor_list.append(anchor_i[:, :3].unsqueeze(0))
                 else:
-                    if exp_cfg['use_semantic'] or exp_cfg['use_panoptic']:
-                        anchor_i = torch.cat((anchor_i, sample['anchor_logits'][i].to(device)), dim=1)
+                    if exp_cfg["use_semantic"] or exp_cfg["use_panoptic"]:
+                        anchor_i = torch.cat((anchor_i, sample["anchor_logits"][i].to(device)), dim=1)
                     anchor_list.append(model.backbone.prepare_input(anchor_i))
                     del anchor_i
 
-            if exp_cfg['3D_net'] != 'PVRCNN':
+            if exp_cfg["3D_net"] != "PVRCNN":
                 anchor = torch.cat(anchor_list)
                 model_in = anchor
-                if exp_cfg['3D_net'] == 'RandLANet':
+                if exp_cfg["3D_net"] == "RandLANet":
                     model_in = prepare_randlanet_input(ConfigSemanticKITTI2(), model_in.cpu(), device)
             else:
                 model_in = KittiDataset.collate_batch(anchor_list)
@@ -295,11 +297,11 @@ def do_inference(
 
             batch_dict = model(model_in, metric_head=False, compute_rotation=False, compute_transl=False)
 
-            emb = batch_dict['out_embedding']
+            emb = batch_dict["out_embedding"]
             emb_list_map.append(emb)
 
         torch.cuda.synchronize()
-        time_net.toc(call_inc=batch_dict['batch_size'] // 2)
+        time_net.toc(call_inc=batch_dict["batch_size"] // 2)
 
     emb_list_map = torch.cat(emb_list_map).cpu().numpy()
 
@@ -365,7 +367,7 @@ def main_process(
                            positive_distance=pos_distance,
                            negative_frames=neg_frames, start_frame=start_frame,
                            ignore_last=ignore_last, is_distance=not_distance)
-    pr_fp = compute_pr_fp(pairs=pairs, positive_distance=args.pos_distance)
+    pr_fp = compute_pr_fp(pairs=pairs, positive_distance=pos_distance)
     ap_ours_fp = compute_ap_from_pr(pr_fp)
     f1_ours_fp = compute_f1_from_pr(pr_fp)
     ep_ours_fp = compute_ep_from_pr(pr_fp)
@@ -418,31 +420,61 @@ def main_process(
         time_net.save_json(save_times_path / "times_model_inference.json")
 
 
-if __name__ == '__main__':
+def cli_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', default='/home/cattaneo/Datasets/KITTI',
-                        help='dataset directory')
-    parser.add_argument('--weights_path', default='/home/cattaneo/checkpoints/deep_lcd')
-    parser.add_argument('--num_iters', type=int, default=1)
-    parser.add_argument('--dataset', type=str, default='kitti')
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument('--sequence', type=str, default=None)
-    parser.add_argument('--loop_file', type=str, default=None)
-    parser.add_argument("--batch_size", type=int, default=6)
-    parser.add_argument('--save_path', type=str, default=None)
-    parser.add_argument('--stats_save_path', type=str, default=None)
-    parser.add_argument('--save_times_path', type=str, default=None)
-    parser.add_argument("--z_offset", type=float, default=0.283)
+    parser.add_argument("--data", default="/data/KITTI",
+                        help="Path to the dataset directory.")
+    parser.add_argument("--weights_path",
+                        help="Path to the model's checkpoint.")
+    parser.add_argument("--num_iters", type=int, default=1,
+                        help="Number of iterations to run inference.")
+    parser.add_argument("--dataset", type=str, default="kitti",
+                        help="Dataset on which to perform inference and evaluate the model's loop closure detection"
+                             " performance.")
+    parser.add_argument("--seed", type=int, default=0,
+                        help="RNG seed.")
+    parser.add_argument("--sequence", type=str, default=None,
+                        help="Dataset sequence on which to evaluate the model. If set to None, a default sequence will"
+                             " be used for the selected dataset.")
+    parser.add_argument("--loop_file", type=str, default=None,
+                        help="Override the configured GT loop file.")
+    parser.add_argument("--batch_size", type=int, default=6,
+                        help="Number of pairs to perform inference on at a time.")
+    parser.add_argument("--save_path", type=str, default=None,
+                        help="Path to the numpy pairwise distance file. If the file does not exist, or the "
+                             "--force_inference flag is set, the script will run  inference, compute the pairwise "
+                             "distance over all frames and save them to this path. If the file exists and"
+                             "--force_inference is not set, no inference will be run and the distances will be read "
+                             "from this file. If None, inference will be performed, but the pairwise distances will "
+                             "not be saved.")
+    parser.add_argument("--stats_save_path", type=str, default=None,
+                        help="Path to the JSON file where the evaluation metrics will be saved. If None, no stats will "
+                             "be saved.")
+    parser.add_argument("--save_times_path", type=str, default=None,
+                        help="Path to the JSON file where the timing stats will be saved. If None, no stats will be "
+                             "saved.")
+    parser.add_argument("--z_offset", type=float, default=0.283,
+                        help="Offset the point cloud along the Z axis by this ammount. Used for aligning ground "
+                             "planes.")
     parser.add_argument("--force_inference", action="store_true",
                         help="Runs inference. If the PR file already exists, it is overwritten.")
-    parser.add_argument("--pos_distance", type=float, default=4.)
-    parser.add_argument("--neg_frames", type=int, default=50)
-    parser.add_argument("--start_frame", type=int, default=100)
+    parser.add_argument("--pos_distance", type=float, default=4.,
+                        help="Positive distance at which loops closures are detected.")
+    parser.add_argument("--neg_frames", type=int, default=50,
+                        help="Minimum number of frames between two scans for them to be considered loop closure"
+                             " candidates.")
+    parser.add_argument("--start_frame", type=int, default=100,
+                        help="Start considering loop closures after this number of frames.")
     parser.add_argument("--not_distance", action="store_false",
-                        help="Runs inference. If the PR file already exists, it is overwritten.")
+                        help="Indicates that the values computed/stored are not distances, but rather"
+                             "some form of a similarity metric.")
     parser.add_argument("--ignore_last", action="store_true",
-                        help="Runs inference. If the PR file already exists, it is overwritten.")
+                        help="If set, the last frame will not be considered for loop closure.")
 
     args = parser.parse_args()
 
-    main_process(0, **vars(args))
+    return vars(args)
+
+
+if __name__ == "__main__":
+    main_process(0, **cli_args())
