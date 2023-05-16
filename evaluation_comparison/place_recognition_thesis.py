@@ -13,8 +13,6 @@ def main():
 	dataset = "kitti360"
 	num_iters = 1
 
-	# dataset_path = Path("/data/arceyd/kitti/")
-	# dataset_path = Path("/home/arceyd/MT/dat/kitti360/")
 	home_path = Path("~/MT/").expanduser()
 	cp_path = home_path / "cp" / "3D"
 	save_path = home_path / "res" / "place_recognition"

@@ -9,8 +9,7 @@ Dataset = namedtuple("dataset", ["path"])
 
 
 def main():
-    # dataset_path = Path("/data/arceyd/kitti/")
-    home_dir = Path("/work/dlclarge2/arceyd-padloc/")
+    home_dir = Path("~").expanduser()
     save_dir = home_dir / "res" / "img" / "lcd"
 
     pair_dir = home_dir / "res" / "final_models"
