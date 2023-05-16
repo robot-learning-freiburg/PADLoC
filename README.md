@@ -10,7 +10,7 @@ This repository is the official implementation of the paper:
 > *IEEE Robotics and Automation Letters (RA-L)*, vol. 8, issue 3, pp. 1319-1326, March 2023
 
 <p align="center">
-  <img src="padloc_architecture.png" alt="Overview of PADLoC architecture" width="600" />
+  <img src="./docs/img/padloc_architecture.png" alt="Overview of PADLoC architecture" width="600" />
 </p>
 
 If you find our work useful, please consider citing our paper:
@@ -32,9 +32,13 @@ If you find our work useful, please consider citing our paper:
 A key component of graph-based SLAM systems is the ability to detect loop closures in a trajectory to reduce the drift accumulated over time from the odometry. Most LiDAR-based methods achieve this goal by using only the geometric information, disregarding the semantics of the scene. In this work, we introduce PADLoC, a LiDAR-based loop closure detection and registration architecture comprising a shared 3D convolutional feature extraction backbone, a global descriptor head for loop closure detection, and a novel transformer-based head for point cloud matching and registration. We present multiple methods for estimating the point-wise matching confidence based on diversity indices. Additionally, to improve forward-backward consistency, we propose the use of two shared matching and registration heads with their source and target inputs swapped by exploiting that the estimated relative transformations must be inverse of each other. Furthermore, we leverage panoptic information during training in the form of a novel loss function that reframes the matching problem as a classification task in the case of the semantic labels and as a graph connectivity assignment for the instance labels. We perform extensive evaluations of PADLoC on multiple real-world datasets demonstrating that it achieves state-of-the-art performance.
 
 
-## 👨‍💻 Code Release
+## 👨‍💻 Code Usage
 
-We will make the code publicly accessible upon acceptance of our paper.
+Please check the documentation files for the specific tasks of:
+* [Requirements and Installation](docs/install.md)
+* [Datasets and preprocessing](docs/preproc.md)
+* [Training a model](docs/training.md)
+* [Evaluating a model](docs/eval.md)
 
 
 ## 👩‍⚖️  License
@@ -48,4 +52,4 @@ For any commercial purpose, please contact the authors.
 This work was funded by the European Union’s Horizon 2020 research and innovation program under grant agreement No 871449-OpenDR and the DFG
 Emmy Noether Program.
 <br><br>
-<a href="https://opendr.eu/"><img src="./opendr_logo.png" alt="drawing" width="250"/></a>
+<a href="https://opendr.eu/"><img src="./docs/img/opendr_logo.png" alt="drawing" width="250"/></a>
