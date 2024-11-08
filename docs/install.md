@@ -21,7 +21,7 @@ Follow these steps to create the Docker image used for running the PADLoC source
 
 1. Clone the github repository.
     ```shell
-    git clone https://https://github.com/robot-learning-freiburg/PADLoC
+    git clone https://github.com/robot-learning-freiburg/PADLoC
    ```
 
 2. Build the Docker image.
