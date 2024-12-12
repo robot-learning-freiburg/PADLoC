@@ -80,7 +80,7 @@ docker run \
 ```
 
 ## Pre-trained Models
-You can find the pre-trained model weights for PADLoC [here](http://padloc.informatik.uni-freiburg.de/download/padloc_20220527_191054_lastiter.tar).
+You can find the pre-trained model weights for PADLoC [here](https://padloc.cs.uni-freiburg.de/download/padloc_20220527_191054_lastiter.tar).
 Download the `.tar` file and place it in the directory that will then be mounted in the Docker Container.
 
 > &#x26a0;&#xfe0f; There is no need to extract the tarball, since the model loading method uses it directly.
